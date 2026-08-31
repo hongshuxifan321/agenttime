@@ -220,6 +220,93 @@ def parse_chatgpt(file_path: str) -> list[dict]:
     return sessions
 
 
+def parse_zcode(db_path: str) -> list[dict]:
+    """解析 ZCode 会话库 (~/.zcode/cli/db/db.sqlite) → 统一会话列表"""
+    import sqlite3
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        # 只统计交互会话(排除后台任务), 与 CC 版排除 subagents 同理
+        sess_rows = con.execute(
+            "SELECT id, title FROM session WHERE task_type='interactive'"
+        ).fetchall()
+        sessions = []
+        for sid, title in sess_rows:
+            parts_by_msg = defaultdict(list)
+            for mid, pdata in con.execute(
+                "SELECT message_id, data FROM part WHERE session_id=? "
+                "ORDER BY COALESCE(sequence, rowid)", (sid,),
+            ):
+                try:
+                    parts_by_msg[mid].append(json.loads(pdata))
+                except Exception:
+                    pass
+
+            msgs, tools, files_touched, timestamps, hours = [], [], [], [], []
+            thinking_count = 0
+            for mid, ts_ms, mdata in con.execute(
+                "SELECT id, time_created, data FROM message WHERE session_id=? "
+                "ORDER BY COALESCE(sequence, rowid)", (sid,),
+            ):
+                try:
+                    m = json.loads(mdata)
+                except Exception:
+                    continue
+                sem = m.get("semantics") or {}
+                if sem.get("uiVisibility") == "hidden":
+                    continue
+                dt = hour = None
+                if ts_ms:
+                    try:
+                        # 库里是毫秒 epoch, 须转本地时区, 否则小时统计整体偏移
+                        dt = datetime.fromtimestamp(ts_ms / 1000).astimezone()
+                        hour = dt.hour; timestamps.append(dt); hours.append(hour)
+                    except Exception:
+                        pass
+
+                kind = sem.get("kind")
+                if m.get("role") == "user" and kind == "user_prompt":
+                    text = _SURROGATE_RE.sub("", " ".join(
+                        p.get("text", "") for p in parts_by_msg.get(mid, [])
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    ))[:MAX_MSG_CHARS]
+                    if text:
+                        msgs.append({"role": "user", "text": text, "timestamp": dt, "hour": hour})
+                elif m.get("role") == "assistant":
+                    think_n = 0
+                    for p in parts_by_msg.get(mid, []):
+                        if not isinstance(p, dict):
+                            continue
+                        t = p.get("type")
+                        if t == "reasoning":
+                            think_n += 1
+                        elif t == "tool":
+                            tools.append(p.get("tool", "?"))
+                            state = p.get("state") or {}
+                            inp = state.get("input") or {}
+                            fp = inp.get("file_path") or inp.get("path") if isinstance(inp, dict) else None
+                            if fp:
+                                files_touched.append(os.path.basename(str(fp)))
+                    thinking_count += think_n
+                    # assistant 消息不拆分展示，但计入思考/工具
+                    msgs.append({"role": "assistant", "text": "", "timestamp": dt, "hour": hour, "think": think_n})
+
+            if any(m_["role"] == "user" for m_ in msgs):
+                sessions.append({
+                    "id": sid,
+                    "title": _SURROGATE_RE.sub("", title or "") or "无标题",
+                    "source": "zcode",
+                    "messages": msgs,
+                    "thinking_count": thinking_count,
+                    "tool_calls": tools,
+                    "file_touches": files_touched,
+                    "timestamps": timestamps,
+                    "hours": hours,
+                })
+        return sessions
+    finally:
+        con.close()
+
+
 def detect_and_parse(path: str) -> tuple[list[dict], str]:
     """自动检测数据源并解析，返回 (会话列表, 来源说明)"""
     if os.path.isdir(path):
@@ -237,6 +324,12 @@ def detect_and_parse(path: str) -> tuple[list[dict], str]:
         return [], ""
 
     if os.path.isfile(path):
+        if path.endswith(".sqlite"):
+            try:
+                sessions = parse_zcode(path)
+                if sessions:
+                    return sessions, f"ZCode ({len(sessions)} 次会话)"
+            except Exception: pass
         try:
             sessions = parse_chatgpt(path)
             if sessions:
@@ -465,10 +558,17 @@ def analyze_sessions(sessions: list[dict]) -> dict:
 
 def analyze(project_dir: str | None = None) -> dict:
     """自动检测数据源并分析"""
+    sessions, source_label = [], ""
     if project_dir is None:
-        project_dir = os.path.expanduser("~/.claude/projects")
-
-    sessions, source_label = detect_and_parse(project_dir)
+        # ZCode 侧默认: 优先 ZCode 会话库, 其次 Claude Code, 最后 ChatGPT 导出
+        zdb = os.path.expanduser("~/.zcode/cli/db/db.sqlite")
+        if os.path.exists(zdb):
+            sessions, source_label = detect_and_parse(zdb)
+        if not sessions:
+            project_dir = os.path.expanduser("~/.claude/projects")
+            sessions, source_label = detect_and_parse(project_dir)
+    else:
+        sessions, source_label = detect_and_parse(project_dir)
 
     # 如果没找到，尝试 ChatGPT 导出文件
     if not sessions:
@@ -481,7 +581,7 @@ def analyze(project_dir: str | None = None) -> dict:
             if sessions: break
 
     if not sessions:
-        return {"error": "未找到任何 AI 对话数据。\n支持: Claude Code (~/.claude/projects) 或 ChatGPT 导出 (conversations.json)"}
+        return {"error": "未找到任何 AI 对话数据。\n支持: ZCode (~/.zcode/cli/db/db.sqlite)、Claude Code (~/.claude/projects) 或 ChatGPT 导出 (conversations.json)"}
 
     result = analyze_sessions(sessions)
     result["source_label"] = source_label

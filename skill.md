@@ -14,7 +14,7 @@ user-invocable: true
 ### 第一步：运行分析引擎
 
 ```bash
-python ~/.claude/skills/agenttime/analyze.py
+python ~/.zcode/skills/agenttime/analyze.py
 ```
 
 直接输出分析结果 JSON 到 stdout。
@@ -57,7 +57,7 @@ python ~/.claude/skills/agenttime/analyze.py
 
 把写好的文章嵌入 HTML 模板：
 
-1. 读取 `~/.claude/skills/agenttime/template.html`
+1. 读取 `~/.zcode/skills/agenttime/template.html`
 2. 用 `<!-- CONTENT -->` 替换规则：
    - 模板中的 `<!-- CONTENT -->` 替换为你的文章 HTML
    - 文章体：每个段落用 `<p>...</p>` 包裹，段落间保留换行
@@ -78,7 +78,7 @@ python ~/.claude/skills/agenttime/analyze.py
 
 ## 模板说明
 
-HTML 模板位置：`~/.claude/skills/agenttime/template.html`
+HTML 模板位置：`~/.zcode/skills/agenttime/template.html`
 
 模板包含：
 - 日/夜模式切换按钮（右上角）

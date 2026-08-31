@@ -10,7 +10,7 @@ Agenttime 分析你和 Claude Code 之间的所有对话记录，然后写一篇
 
 ## 安装
 
-将本目录放入 `~/.claude/skills/`（目录名即 skill 名，此处为 `agenttime`）。
+将本目录放入 `~/.zcode/skills/`（目录名即 skill 名，此处为 `agenttime`）。
 
 ## 使用
 
