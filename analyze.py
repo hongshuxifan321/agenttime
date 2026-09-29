@@ -1,13 +1,50 @@
 """
 Agenttime 深度分析引擎
-支持: Claude Code (JSONL) + ChatGPT (conversations.json)
+支持: Claude Code (JSONL) + DeepSeek Harness (jsonl.zstd) + ZCode (sqlite) + ChatGPT (conversations.json)
+三侧共用同一份代码: 按本副本所在目录自动判定当前是哪一侧, 优先读本侧会话库
 统一内部数据模型 → 分析 → 报告
 """
 
-import json, glob, os, re
+import json, glob, os, re, io
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any
+
+
+# ═══════════════════════════════════════════════════
+# 本侧判定 — 三侧共用一份代码，靠副本自身位置区分
+# ═══════════════════════════════════════════════════
+
+SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
+# …/skills/agenttime → …/skills → Agent 主目录（~/.claude | ~/.dsh | ~/.zcode）
+AGENT_HOME = os.path.dirname(os.path.dirname(SKILL_DIR))
+
+
+def local_source_candidates() -> list[str]:
+    """按本副本所在侧返回优先探测的数据源，本侧在前、CC 存档兜底。
+
+    没有这一步时，三侧的副本都会去读 ZC 的会话库（旧版硬编码 ~/.zcode），
+    结果 CC/DSH 侧跑出来的「个人回顾」其实是 ZC 的对话。
+    """
+    home, side = AGENT_HOME, os.path.basename(AGENT_HOME)
+    if side == ".dsh":
+        primary = os.path.join(home, "sessions")
+    elif side == ".zcode":
+        primary = os.path.join(home, "cli", "db", "db.sqlite")
+    else:
+        primary = os.path.join(home, "projects")
+    cands = [primary]
+    # 兜底: 本机 CC 存档最全；skill 被复制到非标准位置时也靠它
+    cc = os.path.normpath(os.path.join(os.path.expanduser("~"), ".claude", "projects"))
+    if not any(os.path.normpath(c) == cc for c in cands):
+        cands.append(cc)
+    seen, out = set(), []
+    for c in cands:
+        key = os.path.normcase(os.path.normpath(c))
+        if key not in seen and os.path.exists(c):
+            seen.add(key)
+            out.append(c)
+    return out
 
 
 STOPWORDS_EN = {
@@ -307,12 +344,157 @@ def parse_zcode(db_path: str) -> list[dict]:
         con.close()
 
 
+_DSH_LOG_RE = re.compile(r"^session(?:\.v(\d+))?\.jsonl\.zstd$")
+
+
+def _dsh_pick_log(session_dir: str) -> str:
+    """DSH 一个会话目录里会并存 v2/v3/v4 多个格式版本的同一份日志，取版本号最高的。
+
+    实测 session-0923d1ca: v2 214 行 / v3 219 行 / v4 219 行，是同一份日志的不同格式版本，
+    不是增量，所以只读最高版本即可（无版本后缀的按 v0 处理）。
+    """
+    best, best_ver = "", -1
+    for fn in os.listdir(session_dir):
+        m = _DSH_LOG_RE.match(fn)
+        if not m:
+            continue
+        ver = int(m.group(1)) if m.group(1) else 0
+        if ver > best_ver:
+            best, best_ver = os.path.join(session_dir, fn), ver
+    return best
+
+
+def _dsh_read_log(path: str) -> list[dict]:
+    """读 DSH 会话日志。文件是逐行独立的 zstd 帧，用 stream_reader 解多帧。
+
+    不要按魔数 28b52ffd 切帧——压缩载荷里也会出现这个字节序列，切出来全是空帧。
+    """
+    import zstandard as zstd
+    with open(path, "rb") as fh:
+        with zstd.ZstdDecompressor().stream_reader(fh) as reader:
+            text = io.TextIOWrapper(reader, encoding="utf-8", errors="replace").read()
+    events = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    return events
+
+
+def _dsh_arguments_file(arguments: Any) -> str:
+    """从 tool/call 的 arguments（JSON 字符串）里取被操作的文件路径"""
+    if not isinstance(arguments, str):
+        return ""
+    try:
+        args = json.loads(arguments)
+    except Exception:
+        return ""
+    if not isinstance(args, dict):
+        return ""
+    for key in ("file_path", "filePath", "notebook_path", "path"):
+        val = args.get(key)
+        if isinstance(val, str) and val:
+            return val
+    return ""
+
+
+def parse_dsh(sessions_dir: str) -> list[dict]:
+    """解析 DeepSeek Harness 会话目录 (~/.dsh/sessions) → 统一会话列表
+
+    目录结构: sessions/<项目>/<session-id>/session[.vN].jsonl.zstd
+    只读 user/message、assistant/message、tool/call、session/title 这几类提交事件；
+    *-chunks 是流式增量，读进来会把每条消息重复计几十次。
+    """
+    if not os.path.isdir(sessions_dir):
+        return []
+    # 先按会话目录归组：一个目录里并存 v2/v3/v4 多份同一日志的格式版本，
+    # 直接对 glob 结果逐文件解析会把同一会话重复计入（实测 22 个会话目录有 28 份日志）。
+    log_dirs = {os.path.dirname(p) for p in
+                glob.glob(os.path.join(sessions_dir, "**", "session*.jsonl.zstd"),
+                          recursive=True)}
+    sessions = []
+    for session_dir in sorted(log_dirs):
+        log_path = _dsh_pick_log(session_dir)
+        if not log_path:
+            continue
+        try:
+            events = _dsh_read_log(log_path)
+        except Exception:
+            continue
+        if not events:
+            continue
+
+        header = events[0] if events[0].get("type") == "session" else {}
+        sid = header.get("id") or os.path.basename(session_dir)
+        title = ""
+        msgs, tools, files_touched, timestamps, hours = [], [], [], [], []
+        thinking_count = 0
+
+        for ev in events:
+            etype = ev.get("type")
+            data = ev.get("data") or {}
+            dt = hour = None
+            ts_ms = ev.get("time")
+            if isinstance(ts_ms, (int, float)):
+                try:
+                    # 日志里是 UTC 毫秒时间戳，须转本地时区，否则小时统计整体偏移
+                    dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).astimezone()
+                    hour = dt.hour
+                    timestamps.append(dt); hours.append(hour)
+                except (ValueError, OSError, OverflowError):
+                    dt = hour = None
+
+            if etype == "session/title":
+                title = _SURROGATE_RE.sub("", str(data.get("title", "")))
+            elif etype == "user/message":
+                text = extract_text(data.get("content") or [])
+                if text:
+                    msgs.append({"role": "user", "text": text, "timestamp": dt, "hour": hour})
+            elif etype == "assistant/message":
+                content = (data.get("message") or {}).get("content") or []
+                think_n = sum(1 for c in content
+                              if isinstance(c, dict) and c.get("type") == "reasoning")
+                thinking_count += think_n
+                # assistant 消息不拆分展示，但计入思考/工具（与 CC 版一致）
+                msgs.append({"role": "assistant", "text": "", "timestamp": dt,
+                             "hour": hour, "think": think_n})
+            elif etype == "tool/call":
+                name = data.get("name")
+                if name:
+                    tools.append(name)
+                fp = _dsh_arguments_file(data.get("arguments"))
+                if fp:
+                    files_touched.append(os.path.basename(fp))
+
+        if any(m["role"] == "user" for m in msgs):
+            sessions.append({
+                "id": sid,
+                "title": title or "无标题",
+                "source": "dsh",
+                "messages": msgs,
+                "thinking_count": thinking_count,
+                "tool_calls": tools,
+                "file_touches": files_touched,
+                "timestamps": timestamps,
+                "hours": hours,
+            })
+    return sessions
+
+
 def detect_and_parse(path: str) -> tuple[list[dict], str]:
     """自动检测数据源并解析，返回 (会话列表, 来源说明)"""
     if os.path.isdir(path):
         sessions = parse_claude_code(path)
         if sessions:
             return sessions, f"Claude Code ({len(sessions)} 次会话)"
+        # DSH 会话目录（~/.dsh/sessions，jsonl.zstd）
+        sessions = parse_dsh(path)
+        if sessions:
+            return sessions, f"DeepSeek Harness ({len(sessions)} 次会话)"
         # 目录里也可能是 ChatGPT 导出（修复：原代码此处永远不可达）
         cf = os.path.join(path, "conversations.json")
         if os.path.exists(cf):
@@ -560,13 +742,11 @@ def analyze(project_dir: str | None = None) -> dict:
     """自动检测数据源并分析"""
     sessions, source_label = [], ""
     if project_dir is None:
-        # ZCode 侧默认: 优先 ZCode 会话库, 其次 Claude Code, 最后 ChatGPT 导出
-        zdb = os.path.expanduser("~/.zcode/cli/db/db.sqlite")
-        if os.path.exists(zdb):
-            sessions, source_label = detect_and_parse(zdb)
-        if not sessions:
-            project_dir = os.path.expanduser("~/.claude/projects")
-            sessions, source_label = detect_and_parse(project_dir)
+        # 本侧数据源优先（按副本所在目录判定），CC 存档兜底，最后 ChatGPT 导出
+        for candidate in local_source_candidates():
+            sessions, source_label = detect_and_parse(candidate)
+            if sessions:
+                break
     else:
         sessions, source_label = detect_and_parse(project_dir)
 
@@ -581,7 +761,9 @@ def analyze(project_dir: str | None = None) -> dict:
             if sessions: break
 
     if not sessions:
-        return {"error": "未找到任何 AI 对话数据。\n支持: ZCode (~/.zcode/cli/db/db.sqlite)、Claude Code (~/.claude/projects) 或 ChatGPT 导出 (conversations.json)"}
+        return {"error": "未找到任何 AI 对话数据。\n"
+                         "支持: Claude Code (~/.claude/projects)、DeepSeek Harness (~/.dsh/sessions)、"
+                         "ZCode (~/.zcode/cli/db/db.sqlite) 或 ChatGPT 导出 (conversations.json)"}
 
     result = analyze_sessions(sessions)
     result["source_label"] = source_label

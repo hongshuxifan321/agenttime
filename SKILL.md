@@ -14,7 +14,10 @@ user-invocable: true
 ### 第一步：运行分析引擎
 
 ```bash
-python ~/.zcode/skills/agenttime/analyze.py
+# 运行本 skill 目录下的 analyze.py —— 脚本按自身所在目录判定读哪一侧的会话库。
+# 不要跨侧调用其它副本：调 ~/.zcode 的那份，读出来的就是 ZCode 的对话。
+# （CC: ~/.claude/skills/agenttime；DSH: ~/.dsh/skills/agenttime；ZC: ~/.zcode/skills/agenttime）
+python <本 SKILL.md 所在目录>/analyze.py
 ```
 
 直接输出分析结果 JSON 到 stdout。
@@ -57,7 +60,7 @@ python ~/.zcode/skills/agenttime/analyze.py
 
 把写好的文章嵌入 HTML 模板：
 
-1. 读取 `~/.zcode/skills/agenttime/template.html`
+1. 读取本 skill 目录下的 `template.html`
 2. 用 `<!-- CONTENT -->` 替换规则：
    - 模板中的 `<!-- CONTENT -->` 替换为你的文章 HTML
    - 文章体：每个段落用 `<p>...</p>` 包裹，段落间保留换行
@@ -78,7 +81,7 @@ python ~/.zcode/skills/agenttime/analyze.py
 
 ## 模板说明
 
-HTML 模板位置：`~/.zcode/skills/agenttime/template.html`
+HTML 模板位置：本 skill 目录下的 `template.html`
 
 模板包含：
 - 日/夜模式切换按钮（右上角）
