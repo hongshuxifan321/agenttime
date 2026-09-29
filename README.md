@@ -37,6 +37,8 @@ ZCode 里用 `$` 菜单选 skill，或直接说「回顾一下」。然后等一
 - ZCode（`~/.zcode/cli/db/db.sqlite`）
 - ChatGPT（将 `conversations.json` 放在桌面或下载文件夹中，自动检测）
 
+**依赖**：除标准库外，只有读 DeepSeek Harness 会话需要 `zstandard`（`pip install zstandard`）。缺这个包不会报错，但 DSH 侧会静默降级去读 Claude Code 存档——`source_label` 显示成「Claude Code (N 次会话)」而你在 DSH 里跑，就是缺包。其余三个数据源纯标准库。
+
 ## 隐私
 
 所有分析在你本地完成。数据从不离开你的电脑。
