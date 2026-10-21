@@ -1,7 +1,6 @@
 """
 Agenttime 深度分析引擎
-支持: Claude Code (JSONL) + DeepSeek Harness (jsonl.zstd) + ZCode (sqlite) + ChatGPT (conversations.json)
-三侧共用同一份代码: 按本副本所在目录自动判定当前是哪一侧, 优先读本侧会话库
+读取 DeepSeek Harness 会话库 (jsonl.zstd) 与 ChatGPT 导出 (conversations.json)
 统一内部数据模型 → 分析 → 报告
 """
 
@@ -12,39 +11,14 @@ from typing import Any
 
 
 # ═══════════════════════════════════════════════════
-# 本侧判定 — 三侧共用一份代码，靠副本自身位置区分
+# 数据源定位 — DeepSeek Harness 会话库
 # ═══════════════════════════════════════════════════
-
-SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
-# …/skills/agenttime → …/skills → Agent 主目录（~/.claude | ~/.dsh | ~/.zcode）
-AGENT_HOME = os.path.dirname(os.path.dirname(SKILL_DIR))
 
 
 def local_source_candidates() -> list[str]:
-    """按本副本所在侧返回优先探测的数据源，本侧在前、CC 存档兜底。
-
-    没有这一步时，三侧的副本都会去读 ZC 的会话库（旧版硬编码 ~/.zcode），
-    结果 CC/DSH 侧跑出来的「个人回顾」其实是 ZC 的对话。
-    """
-    home, side = AGENT_HOME, os.path.basename(AGENT_HOME)
-    if side == ".dsh":
-        primary = os.path.join(home, "sessions")
-    elif side == ".zcode":
-        primary = os.path.join(home, "cli", "db", "db.sqlite")
-    else:
-        primary = os.path.join(home, "projects")
-    cands = [primary]
-    # 兜底: 本机 CC 存档最全；skill 被复制到非标准位置时也靠它
-    cc = os.path.normpath(os.path.join(os.path.expanduser("~"), ".claude", "projects"))
-    if not any(os.path.normpath(c) == cc for c in cands):
-        cands.append(cc)
-    seen, out = set(), []
-    for c in cands:
-        key = os.path.normcase(os.path.normpath(c))
-        if key not in seen and os.path.exists(c):
-            seen.add(key)
-            out.append(c)
-    return out
+    """返回本机数据源探测列表：DeepSeek Harness 会话库（~/.dsh/sessions）。"""
+    cands = [os.path.join(os.path.expanduser("~"), ".dsh", "sessions")]
+    return [c for c in cands if os.path.exists(c)]
 
 
 STOPWORDS_EN = {
@@ -93,93 +67,6 @@ def extract_text(cl: list) -> str:
 # ═══════════════════════════════════════════════════
 # 数据源解析器
 # ═══════════════════════════════════════════════════
-
-def parse_claude_code(project_dir: str) -> list[dict]:
-    """解析 Claude Code JSONL → 统一会话列表"""
-    jsonl_files = list(set(
-        glob.glob(os.path.join(project_dir, "*", "*.jsonl")) +
-        glob.glob(os.path.join(project_dir, "*.jsonl"))
-    ))
-    # 排除 subagents/ 子目录: 子代理会话是 AI 对 AI, 不计入「用户会话」统计
-    # (主代理派生子代理时该目录才会出现, 不排除会污染 total_sessions 等指标)
-    jsonl_files = [
-        fp for fp in jsonl_files
-        if "subagents" not in os.path.normpath(fp).split(os.sep)
-    ]
-    sessions_raw = {}
-    for fp in jsonl_files:
-        sid = os.path.splitext(os.path.basename(fp))[0]
-        events = []
-        try:
-            with open(fp, encoding="utf-8") as f:
-                for line in f:
-                    try: events.append(json.loads(line.strip()))
-                    except json.JSONDecodeError: pass
-        except Exception: pass
-        if events: sessions_raw[sid] = events
-
-    sessions = []
-    for sid, events in sessions_raw.items():
-        msgs = []
-        titles = []
-        tools = []
-        files_touched = []
-        timestamps = []
-        hours = []
-        thinking_count = 0
-
-        for ev in events:
-            t = ev.get("type"); ts = ev.get("timestamp","")
-            hour = None; dt = None
-            if ts:
-                try:
-                    # jsonl 里是 UTC 时间戳，须转本地时区，否则小时统计整体偏移
-                    dt = datetime.fromisoformat(ts.replace("Z","+00:00")).astimezone()
-                    hour = dt.hour; timestamps.append(dt); hours.append(hour)
-                except: pass
-
-            if t == "ai-title":
-                # 标题同样可能有孤立代理字符，过滤后作为散文素材才可用
-                titles.append(_SURROGATE_RE.sub("", ev.get("aiTitle","")))
-            elif t == "user":
-                text = extract_text(ev.get("message",{}).get("content",[]))
-                if text: msgs.append({"role":"user","text":text,"timestamp":dt,"hour":hour})
-            elif t == "assistant":
-                msg = ev.get("message",{})
-                think_n = 0
-                for c in msg.get("content",[]):
-                    if isinstance(c,dict):
-                        if c.get("type")=="thinking": think_n += 1
-                        elif c.get("type")=="tool_use":
-                            tools.append(c.get("name","?"))
-                thinking_count += think_n
-                # assistant 消息不拆分展示，但计入思考/工具
-                msgs.append({"role":"assistant","text":"","timestamp":dt,"hour":hour,"think":think_n})
-            elif t == "file-history-delta":
-                p = ev.get("trackingPath","")
-                if p: files_touched.append(os.path.basename(p))
-            elif t == "file-history-snapshot":
-                # 新版 Claude Code: snapshot.trackedFileBackups 的键是文件路径
-                backups = ev.get("snapshot", {}).get("trackedFileBackups", {})
-                if isinstance(backups, dict):
-                    for p in backups:
-                        if p:
-                            files_touched.append(os.path.basename(p))
-
-        if any(m["role"]=="user" for m in msgs):
-            sessions.append({
-                "id": sid,
-                "title": titles[-1] if titles else "无标题",
-                "source": "claude-code",
-                "messages": msgs,
-                "thinking_count": thinking_count,
-                "tool_calls": tools,
-                "file_touches": files_touched,
-                "timestamps": timestamps,
-                "hours": hours,
-            })
-    return sessions
-
 
 def parse_chatgpt(file_path: str) -> list[dict]:
     """解析 ChatGPT conversations.json → 统一会话列表"""
@@ -255,93 +142,6 @@ def parse_chatgpt(file_path: str) -> list[dict]:
                 "created": created,
             })
     return sessions
-
-
-def parse_zcode(db_path: str) -> list[dict]:
-    """解析 ZCode 会话库 (~/.zcode/cli/db/db.sqlite) → 统一会话列表"""
-    import sqlite3
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    try:
-        # 只统计交互会话(排除后台任务), 与 CC 版排除 subagents 同理
-        sess_rows = con.execute(
-            "SELECT id, title FROM session WHERE task_type='interactive'"
-        ).fetchall()
-        sessions = []
-        for sid, title in sess_rows:
-            parts_by_msg = defaultdict(list)
-            for mid, pdata in con.execute(
-                "SELECT message_id, data FROM part WHERE session_id=? "
-                "ORDER BY COALESCE(sequence, rowid)", (sid,),
-            ):
-                try:
-                    parts_by_msg[mid].append(json.loads(pdata))
-                except Exception:
-                    pass
-
-            msgs, tools, files_touched, timestamps, hours = [], [], [], [], []
-            thinking_count = 0
-            for mid, ts_ms, mdata in con.execute(
-                "SELECT id, time_created, data FROM message WHERE session_id=? "
-                "ORDER BY COALESCE(sequence, rowid)", (sid,),
-            ):
-                try:
-                    m = json.loads(mdata)
-                except Exception:
-                    continue
-                sem = m.get("semantics") or {}
-                if sem.get("uiVisibility") == "hidden":
-                    continue
-                dt = hour = None
-                if ts_ms:
-                    try:
-                        # 库里是毫秒 epoch, 须转本地时区, 否则小时统计整体偏移
-                        dt = datetime.fromtimestamp(ts_ms / 1000).astimezone()
-                        hour = dt.hour; timestamps.append(dt); hours.append(hour)
-                    except Exception:
-                        pass
-
-                kind = sem.get("kind")
-                if m.get("role") == "user" and kind == "user_prompt":
-                    text = _SURROGATE_RE.sub("", " ".join(
-                        p.get("text", "") for p in parts_by_msg.get(mid, [])
-                        if isinstance(p, dict) and p.get("type") == "text"
-                    ))[:MAX_MSG_CHARS]
-                    if text:
-                        msgs.append({"role": "user", "text": text, "timestamp": dt, "hour": hour})
-                elif m.get("role") == "assistant":
-                    think_n = 0
-                    for p in parts_by_msg.get(mid, []):
-                        if not isinstance(p, dict):
-                            continue
-                        t = p.get("type")
-                        if t == "reasoning":
-                            think_n += 1
-                        elif t == "tool":
-                            tools.append(p.get("tool", "?"))
-                            state = p.get("state") or {}
-                            inp = state.get("input") or {}
-                            fp = inp.get("file_path") or inp.get("path") if isinstance(inp, dict) else None
-                            if fp:
-                                files_touched.append(os.path.basename(str(fp)))
-                    thinking_count += think_n
-                    # assistant 消息不拆分展示，但计入思考/工具
-                    msgs.append({"role": "assistant", "text": "", "timestamp": dt, "hour": hour, "think": think_n})
-
-            if any(m_["role"] == "user" for m_ in msgs):
-                sessions.append({
-                    "id": sid,
-                    "title": _SURROGATE_RE.sub("", title or "") or "无标题",
-                    "source": "zcode",
-                    "messages": msgs,
-                    "thinking_count": thinking_count,
-                    "tool_calls": tools,
-                    "file_touches": files_touched,
-                    "timestamps": timestamps,
-                    "hours": hours,
-                })
-        return sessions
-    finally:
-        con.close()
 
 
 _DSH_LOG_RE = re.compile(r"^session(?:\.v(\d+))?\.jsonl\.zstd$")
@@ -459,7 +259,7 @@ def parse_dsh(sessions_dir: str) -> list[dict]:
                 think_n = sum(1 for c in content
                               if isinstance(c, dict) and c.get("type") == "reasoning")
                 thinking_count += think_n
-                # assistant 消息不拆分展示，但计入思考/工具（与 CC 版一致）
+                # assistant 消息不拆分展示，但计入思考/工具
                 msgs.append({"role": "assistant", "text": "", "timestamp": dt,
                              "hour": hour, "think": think_n})
             elif etype == "tool/call":
@@ -488,14 +288,11 @@ def parse_dsh(sessions_dir: str) -> list[dict]:
 def detect_and_parse(path: str) -> tuple[list[dict], str]:
     """自动检测数据源并解析，返回 (会话列表, 来源说明)"""
     if os.path.isdir(path):
-        sessions = parse_claude_code(path)
-        if sessions:
-            return sessions, f"Claude Code ({len(sessions)} 次会话)"
         # DSH 会话目录（~/.dsh/sessions，jsonl.zstd）
         sessions = parse_dsh(path)
         if sessions:
             return sessions, f"DeepSeek Harness ({len(sessions)} 次会话)"
-        # 目录里也可能是 ChatGPT 导出（修复：原代码此处永远不可达）
+        # 目录里也可能是 ChatGPT 导出
         cf = os.path.join(path, "conversations.json")
         if os.path.exists(cf):
             try:
@@ -506,12 +303,6 @@ def detect_and_parse(path: str) -> tuple[list[dict], str]:
         return [], ""
 
     if os.path.isfile(path):
-        if path.endswith(".sqlite"):
-            try:
-                sessions = parse_zcode(path)
-                if sessions:
-                    return sessions, f"ZCode ({len(sessions)} 次会话)"
-            except Exception: pass
         try:
             sessions = parse_chatgpt(path)
             if sessions:
@@ -742,7 +533,7 @@ def analyze(project_dir: str | None = None) -> dict:
     """自动检测数据源并分析"""
     sessions, source_label = [], ""
     if project_dir is None:
-        # 本侧数据源优先（按副本所在目录判定），CC 存档兜底，最后 ChatGPT 导出
+        # DSH 会话库优先，最后 ChatGPT 导出
         for candidate in local_source_candidates():
             sessions, source_label = detect_and_parse(candidate)
             if sessions:
@@ -762,8 +553,7 @@ def analyze(project_dir: str | None = None) -> dict:
 
     if not sessions:
         return {"error": "未找到任何 AI 对话数据。\n"
-                         "支持: Claude Code (~/.claude/projects)、DeepSeek Harness (~/.dsh/sessions)、"
-                         "ZCode (~/.zcode/cli/db/db.sqlite) 或 ChatGPT 导出 (conversations.json)"}
+                         "支持: DeepSeek Harness (~/.dsh/sessions) 或 ChatGPT 导出 (conversations.json)"}
 
     result = analyze_sessions(sessions)
     result["source_label"] = source_label
@@ -777,7 +567,7 @@ def analyze(project_dir: str | None = None) -> dict:
 if __name__ == "__main__":
     """CLI: python analyze.py [数据路径] → 分析结果 JSON 到 stdout"""
     import sys
-    # Windows 管道下 Python 默认按 GBK 编码输出, Claude Code 按 UTF-8 读取
+    # Windows 管道下 Python 默认按 GBK 编码输出, 调用方按 UTF-8 读取
     # 会得到乱码 JSON。必须显式切到 UTF-8。
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")

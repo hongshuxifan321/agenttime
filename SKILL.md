@@ -14,9 +14,7 @@ user-invocable: true
 ### 第一步：运行分析引擎
 
 ```bash
-# 运行本 skill 目录下的 analyze.py —— 脚本按自身所在目录判定读哪一侧的会话库。
-# 不要跨侧调用其它副本：调 ~/.zcode 的那份，读出来的就是 ZCode 的对话。
-# （CC: ~/.claude/skills/agenttime；DSH: ~/.dsh/skills/agenttime；ZC: ~/.zcode/skills/agenttime）
+# 运行本 skill 目录下的 analyze.py，读 ~/.dsh/sessions 下的会话库
 python <本 SKILL.md 所在目录>/analyze.py
 ```
 
@@ -102,7 +100,7 @@ HTML 模板位置：本 skill 目录下的 `template.html`
 | total_sessions | 会话总数 |
 | total_user_msgs | 用户消息总数 |
 | total_assistant_msgs | AI 回复总数 |
-| total_thinking | 思考块总数（Claude Code 专属） |
+| total_thinking | 思考块总数 |
 | total_tools | 工具调用总数 |
 | total_chars | 用户输入总字符数 |
 | avg_msg_chars | 平均每条消息字符数 |
