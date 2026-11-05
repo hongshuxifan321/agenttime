@@ -177,5 +177,7 @@ def build_facts(sessions: list[Session], report: LoadReport | None = None) -> di
                   "denied": approvals_asked - approvals_granted},
         "projects": projects[:10],
         "deepest_project": max(projects, key=lambda p: p["tools"]) if projects else None,
+        # 数据来自哪几个 agent、各贡献多少会话——合并多源时用来核对口径
+        "sources": dict(Counter(s.source for s in sessions)),
         "quality": report.as_dict(),
     }

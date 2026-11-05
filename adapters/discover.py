@@ -118,3 +118,60 @@ def scan(home: str = HOME, exclude=()) -> list[dict]:
 
     found.sort(key=lambda x: -x["count"])
     return found
+
+
+# ── 已知 agent 的固定路径 ─────────────────────────────────────────────
+# 通用扫描只到 depth 2，够不着 .claude/projects/<项目>/<uuid>.jsonl 这种结构，
+# 而且文件名是 uuid，不带任何关键词。对已知 agent 直接按固定路径探。
+# 这里只列确认过的位置——猜错会给人假的希望。
+_KNOWN = (
+    (".dsh/sessions", "DeepSeek Harness"),
+    (".claude/projects", "Claude Code"),
+    (".codex/sessions", "Codex"),
+    (".zcode/cli/db/db.sqlite", "ZCode"),
+    (".raixis/sessions", "raixis"),
+)
+
+_MAX_LIST = 4000
+
+
+def _top(path: str, home: str) -> str:
+    rel = os.path.relpath(path, home)
+    return os.path.join(home, rel.split(os.sep)[0])
+
+
+def _walk_files(path: str) -> list[str]:
+    """列出候选文件（相对路径）。文件本身就算一个，目录则递归找。"""
+    if os.path.isfile(path):
+        return [os.path.basename(path)]
+    out = []
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for fn in filenames:
+            if _is_json(fn) or _is_db(fn):
+                out.append(os.path.relpath(os.path.join(dirpath, fn), path))
+                if len(out) >= _MAX_LIST:
+                    return out
+    return out
+
+
+def known(home: str = HOME, exclude=()) -> list[dict]:
+    """按已知 agent 的固定路径探测，比通用扫描可靠。
+
+    `exclude` 是已适配好的顶层目录（绝对路径），命中就跳过。
+    返回 [{name, path, count, sample}]。
+    """
+    exclude_top = {os.path.abspath(p) for p in exclude}
+    out = []
+    for rel, name in _KNOWN:
+        path = os.path.join(home, *rel.split("/"))
+        if not os.path.exists(path):
+            continue
+        if os.path.abspath(_top(path, home)) in exclude_top:
+            continue
+        files = _walk_files(path)
+        if not files:
+            continue
+        out.append({"name": name, "path": path, "count": len(files),
+                    "sample": files[:3]})
+    out.sort(key=lambda x: -x["count"])
+    return out

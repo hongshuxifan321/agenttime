@@ -26,13 +26,31 @@ So the report contains lines like "I cut your messages wherever the gap exceeded
 
 ## Install
 
-Script (recommended):
+This repository *is* the skill. Put it in your agent's skills directory and you are done.
+
+### DeepSeek Harness
 
 ```powershell
+git clone https://github.com/hongshuxifan321/agenttime "$HOME\.dsh\skills\agenttime"
+```
+
+```bash
+git clone https://github.com/hongshuxifan321/agenttime ~/.dsh/skills/agenttime
+```
+
+Restart the agent; it will pick the skill up.
+
+### Any other agent, or several at once
+
+```powershell
+git clone https://github.com/hongshuxifan321/agenttime
+cd agenttime
 .\install.ps1
 ```
 
 ```bash
+git clone https://github.com/hongshuxifan321/agenttime
+cd agenttime
 ./install.sh
 ```
 
@@ -44,7 +62,9 @@ The script looks for skill directories that already exist on this machine — `~
 | `-Link` / `-l` | Symlink instead of copying, so edits apply immediately (on Windows this needs Developer Mode or an elevated shell; falls back to copying) |
 | `-Force` / `-f` | Overwrite an existing install without asking |
 
-Manual: copy the whole directory to `<skills>/agenttime`. The directory name must be `agenttime`.
+### Let the agent do it
+
+Hand the repository URL to your agent and ask it to clone the repo into its own skills directory. `SKILL.md` tells it what to do next.
 
 Dependency:
 
@@ -67,7 +87,9 @@ python cli.py scan --out facts.json        # statistics
 python cli.py render facts.json narrative.json
 ```
 
-Output defaults to `~/Desktop/agenttime_report_YYYYMMDD.html`. If the desktop is not writable it falls back to the current directory and prints the real path.
+Output defaults to `~/Desktop/agenttime_report_YYYYMMDD_HHMMSS.html`. The timestamp is down to the second, so running it several times a day — or once per agent — never overwrites an earlier report. If the desktop is not writable it falls back to the current directory and prints the real path, still without overwriting anything already there.
+
+Passing `--out` does overwrite. That is a name you chose yourself.
 
 Keep intermediates in `.agenttime/` under the current directory rather than `$env:TEMP`: inside the DSH sandbox the session TEMP is `Temp\dsh-xxxx` while an elevated process gets `Temp`, so files go missing halfway through.
 
@@ -101,7 +123,17 @@ Only **DeepSeek Harness** (`~/.dsh/sessions`) is officially supported today.
 
 It is the only source verified against real data. Other agent log formats differ a lot: some mix a system prompt into user messages, some encrypt the reasoning, some record nothing locally at all. Shipping an adapter nobody has validated would only create false expectations.
 
-But agenttime does not pretend other agents do not exist. `doctor` scans your home directory and lists places that look like conversation data but have no adapter yet:
+But agenttime does not pretend other agents do not exist.
+
+### Several agents at once
+
+When more than one source is readable, `scan` **merges them into a single report**. Your conversations are spread across whatever agents you used; what you want is all of it, not one of them. `sources` in `facts.json` records how many sessions each one contributed.
+
+For a single source: `python cli.py scan --source dsh`.
+
+### What it cannot read, it says it cannot read
+
+`doctor` looks in two places. First, fixed paths for known agents — Claude Code's `~/.claude/projects`, Codex's `~/.codex/sessions`, ZCode's `~/.zcode/cli/db`. These are nested several levels deep and the files are named by UUID, so a generic directory scan will never find them. Then a generic scan catches anything else whose name looks like a conversation store.
 
 ```
 found 1 source:
@@ -110,17 +142,17 @@ found 1 source:
     40 sessions · 612 human messages
     filtered 481 injected system messages
 
-some places look like conversation data but have no adapter yet:
+these places hold conversation data that agenttime cannot read yet:
 
-  ~/.raixis
-    3 candidate files, e.g. sessions/159ef894-....json
-  ~/.codex
-    2 candidate files, e.g. session_index.jsonl
+  Codex  ~/.codex/sessions
+    98 candidate files, e.g. 2026/11/05/rollout-....jsonl.zst
+  ZCode  ~/.zcode/cli/db/db.sqlite
+    1 candidate file, e.g. db.sqlite
 ```
 
-When it sees this, the skill tells the user honestly: there may be conversations here, but agenttime cannot read them yet. It will not substitute other data, and it will not quietly ignore them.
+**On a machine without DSH this output is the whole point.** `doctor` exits non-zero, but not with a bare "not found" — it tells you what conversation data exists, where, and then admits it cannot read it. It will not assemble a report out of something else.
 
-Detection is deliberately conservative: a directory or file name must contain `session` / `chat` / `conversation` / `history` / `thread`, and databases additionally need a corroborating directory name. Better to miss one than to treat an audit log as a conversation.
+The generic scan is deliberately conservative: a directory or file name must contain `session` / `chat` / `conversation` / `history` / `thread`, and databases additionally need a corroborating directory name. Better to miss one than to treat an audit log as a conversation.
 
 ## Adding a source
 

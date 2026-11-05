@@ -26,13 +26,31 @@ agenttime 想给 AI 对话做同样的事。多出来的一点私心是——它
 
 ## 安装
 
-用脚本（推荐）：
+这个仓库本身就是 skill，叫 `agenttime`。放进 agent 的 skills 目录就等于装好了。
+
+### DeepSeek Harness
 
 ```powershell
+git clone https://github.com/hongshuxifan321/agenttime "$HOME\.dsh\skills\agenttime"
+```
+
+```bash
+git clone https://github.com/hongshuxifan321/agenttime ~/.dsh/skills/agenttime
+```
+
+重启 agent，它会自己发现这个 skill。
+
+### 其它 agent，或者想一次装到好几个地方
+
+```powershell
+git clone https://github.com/hongshuxifan321/agenttime
+cd agenttime
 .\install.ps1
 ```
 
 ```bash
+git clone https://github.com/hongshuxifan321/agenttime
+cd agenttime
 ./install.sh
 ```
 
@@ -44,7 +62,9 @@ agenttime 想给 AI 对话做同样的事。多出来的一点私心是——它
 | `-Link` / `-l` | 用符号链接，改代码立即生效（Windows 需要开发者模式或管理员；失败会回退成复制） |
 | `-Force` / `-f` | 覆盖已安装的版本，不再询问 |
 
-手动装：把整个目录复制到 `<skills>/agenttime`。目录名必须是 `agenttime`。
+### 让 agent 自己装
+
+不想敲命令就把仓库地址丢给 agent，让它克隆到自己的 skills 目录。仓库里有 `SKILL.md`，agent 读得懂要干什么。
 
 依赖：
 
@@ -67,7 +87,9 @@ python cli.py scan --out facts.json        # 统计
 python cli.py render facts.json narrative.json
 ```
 
-默认输出 `~/Desktop/agenttime_report_YYYYMMDD.html`。桌面写不进去时回退到当前目录，并打印真实路径。
+默认输出 `~/Desktop/agenttime_report_YYYYMMDD_HHMMSS.html`。文件名带时分秒——同一天跑几次、几个 agent 各出一份，都不会互相覆盖。桌面写不进去时回退到当前目录并打印真实路径，回退之后同样不覆盖已有文件。
+
+用 `--out` 指定路径时可以覆盖，那是你自己起的名字。
 
 中间文件建议放当前目录的 `.agenttime/`，不要用 `$env:TEMP`：在 DSH 沙箱里，会话的 TEMP 是 `Temp\dsh-xxxx`，提权进程的是 `Temp`，中途提权会找不到文件。
 
@@ -101,7 +123,17 @@ python cli.py render facts.json narrative.json
 
 它是唯一在真机上验证过的源。别的 agent 日志格式差异很大：有的把系统提示混进用户消息，有的把思考内容加密，有的根本不在本地留记录。没验证过的 adapter 发出来，只会给人错误的期待。
 
-但 agenttime 不假装看不见别的 agent。`doctor` 会扫一遍主目录，把「看起来像对话数据、但还没有 adapter」的地方列出来：
+但 agenttime 不假装看不见别的 agent。
+
+### 多个 agent 怎么办
+
+如果以后有几个源都能读，`scan` 会把它们**合并成一份报告**——你的对话散在几个 agent 里，你要的是「我的全部」，不是其中一个。`facts.json` 里的 `sources` 记着每个源贡献了多少会话。
+
+只想看某一个：`python cli.py scan --source dsh`。
+
+### 读不了的，直接说读不了
+
+`doctor` 认两类线索：一是已知 agent 的固定路径——Claude Code 的 `~/.claude/projects`、Codex 的 `~/.codex/sessions`、ZCode 的 `~/.zcode/cli/db`——这些目录层层嵌套、文件名是 uuid，通用的目录扫描根本够不着；二是一遍通用扫描兜底，捡那些没有 adapter 但名字像会话的文件。
 
 ```
 找到 1 个数据源：
@@ -110,17 +142,17 @@ python cli.py render facts.json narrative.json
     40 个会话 · 612 条真人消息
     挡掉系统注入 481 条
 
-还有一些地方像对话数据，但还没有 adapter：
+还有这些地方有对话数据，但 agenttime 还读不了：
 
-  ~/.raixis
-    发现 3 个候选文件，例如 sessions/159ef894-....json
-  ~/.codex
-    发现 2 个候选文件，例如 session_index.jsonl
+  Codex  ~/.codex/sessions
+    98 个候选文件，例如 2026/11/05/rollout-....jsonl.zst
+  ZCode  ~/.zcode/cli/db/db.sqlite
+    1 个候选文件，例如 db.sqlite
 ```
 
-看到这种输出，skill 会如实告诉用户：这里可能有对话，但 agenttime 还读不了。不会拿别的数据顶上，也不会假装没看见。
+**没有 DSH 的机器上，这段输出最重要。** `doctor` 会返回非 0，但不会只丢一句「没找到」——它会告诉你机器上有哪些对话、在哪个目录，然后承认自己读不了。不会拿别的东西凑一份报告出来。
 
-判断偏保守：目录名或文件名要带 `session` / `chat` / `conversation` / `history` / `thread` 才认，数据库还要目录名佐证。宁可漏报，也不要把审计日志当成对话。
+通用扫描判断偏保守：目录名或文件名要带 `session` / `chat` / `conversation` / `history` / `thread` 才认，数据库还要目录名佐证。宁可漏报，也不要把审计日志当成对话。
 
 ## 加一个数据源
 

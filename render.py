@@ -13,7 +13,7 @@ import json
 import os
 import re
 import sys
-from datetime import date
+from datetime import datetime
 
 PLACE = re.compile(r"\{([A-Za-z_][\w.\-]*)((?:\|[a-z]+)*)\}")
 
@@ -167,18 +167,39 @@ def _daterange(facts) -> str:
 
 
 def default_out() -> str:
-    name = f"agenttime_report_{date.today().strftime('%Y%m%d')}.html"
-    return os.path.join(os.path.expanduser("~"), "Desktop", name)
+    """文件名带时分秒，同一天跑几次、几个 agent 各出一份都分得开。"""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(os.path.expanduser("~"), "Desktop",
+                        f"agenttime_report_{stamp}.html")
 
 
-def write_out(text: str, path: str) -> str:
-    """先写请求的路径；桌面不可写（沙箱）时回退到当前目录，并把真实路径返回。"""
+def _unique(path: str) -> str:
+    """路径已被占用时加 _2、_3。"""
+    if not os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    n = 2
+    while os.path.exists(f"{base}_{n}{ext}"):
+        n += 1
+    return f"{base}_{n}{ext}"
+
+
+def write_out(text: str, path: str, allow_overwrite: bool = True) -> str:
+    """先写请求的路径；桌面不可写（沙箱）时回退到当前目录，并把真实路径返回。
+
+    `allow_overwrite=False` 用于默认文件名：不覆盖任何已有文件，包括回退之后
+    落在当前目录里的那一份。同一个文件名写两次是使用者最不希望看到的事。
+    """
+    if not allow_overwrite:
+        path = _unique(path)
     try:
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(text)
         return path
     except OSError as exc:
         fallback = os.path.abspath(os.path.basename(path))
+        if not allow_overwrite:
+            fallback = _unique(fallback)
         with open(fallback, "w", encoding="utf-8") as fh:
             fh.write(text)
         print(f"[warn] 无法写入 {path}（{exc.__class__.__name__}），已改写到 {fallback}")
@@ -222,7 +243,9 @@ def main(argv: list[str]) -> int:
     if MISSING:
         print("[warn] 这些占位符在 facts.json 里找不到，已渲染为空："
               + "、".join(sorted(MISSING)))
-    final = write_out(page, out_path or default_out())
+    # 用户明确指定 --out 时可以覆盖；用默认文件名时一份都不覆盖
+    final = write_out(page, out_path or default_out(),
+                      allow_overwrite=bool(out_path))
     print(f"写入 {final}（{len(page):,} 字节，{len(narrative['cards'])} 张卡）")
     return 0
 
