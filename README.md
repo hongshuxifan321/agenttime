@@ -51,12 +51,32 @@ python cli.py render facts.json narrative.json
 
 | agent | 日志位置 | 状态 |
 |---|---|---|
-| DeepSeek Harness | `~/.dsh/sessions` | 支持，真机验证 |
-| Claude Code | `~/.claude/projects` | 支持，fixture 验证（尚未在真机数据上跑过） |
+| DeepSeek Harness | `~/.dsh/sessions` | 真机验证 |
+| Claude Code | `~/.claude/projects` | fixture 验证（本机无真机数据） |
+| ZCode | `~/.zcode/cli/db/db.sqlite` | 真机验证 |
+| Codex | `~/.codex/sessions` | 能读文件，但**读不到真人输入**（见下） |
 
-Claude Code 的 adapter 是按[公开的会话格式文档](https://github.com/neilberkman/ccrider/blob/v1.1.8/research/schema.md)写的，用 `tests/fixtures/` 里手工构造的会话回归测试。如果你有 Claude Code 的真实会话，跑一次 `python cli.py doctor` 就能确认读不读得到；读到了但数字明显不对，把结构和现象记下来提 issue。
+各源能提供的数据不一样，缺的就少做几张卡：
+
+| | 对话 | 思考量 | 工具调用 | 审批 |
+|---|---|---|---|---|
+| DSH | ✓ | ✓ | ✓ | ✓ |
+| Claude Code | ✓ | ✓ | ✓ | ✗ |
+| ZCode | ✓ | ✓ | ✓ | ✗ |
+| Codex | 常为空 | ✗ | ✗ | ✗ |
+
+**关于 Codex**：它的 rollout 日志里，`response_item` 的 `role=user` 是发给模型的完整请求（混着 30K 字符的系统提示），而 `event_msg` 的 `UserMessage` 实测也全是系统提示。sqlite 里只有线程目录、没有消息内容。所以 adapter 保留着，但通常读不出东西——这比拿系统提示凑一份报告诚实。
+
+Claude Code 的 adapter 按[公开的会话格式文档](https://github.com/neilberkman/ccrider/blob/v1.1.8/research/schema.md)写的，用 `tests/fixtures/` 里手工构造的会话回归测试。如果你有真实的 Claude Code 会话，跑一次 `python cli.py doctor` 就能确认读不读得到。
 
 加一个新 agent = 在 `adapters/` 下写一个文件，实现 `detect()` 和 `load()`，然后在 `adapters/__init__.py` 的 `REGISTRY` 里加一行。统计和渲染都不用动。
+
+## 环境要求
+
+- Python 3.10+（用了 `str | None` 语法）
+- `zstandard`：只有读 DSH 和 Codex 时需要，`pip install zstandard`
+- Claude Code / ZCode 只用标准库
+- macOS / Linux / Windows 都可以，路径用 `~` 展开
 
 ## 测试
 

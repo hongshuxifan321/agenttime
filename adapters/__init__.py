@@ -3,12 +3,14 @@
 加一个新 agent 只需要在这里多一行，engine 和 render 都不用动。
 """
 
-from . import claude_code, dsh
+from . import claude_code, codex, dsh, zcode
 
 # (名字, 探测函数, 读取函数)
 REGISTRY = [
     ("dsh", dsh.detect, dsh.load),
     ("claude_code", claude_code.detect, claude_code.load),
+    ("codex", codex.detect, codex.load),
+    ("zcode", zcode.detect, zcode.load),
 ]
 
 

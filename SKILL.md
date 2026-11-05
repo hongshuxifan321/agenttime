@@ -15,13 +15,16 @@ user-invocable: true
 
 ### 第一步：跑数据
 
-中间文件放在**当前工作目录**下的 `.agenttime/`，不要用 `$env:TEMP`——沙箱会话的 TEMP 是 `Temp\dsh-xxxx`，提权进程的是 `Temp`，两边不一致，中途提权会找不到文件。
+先确定 skill 目录。**不要假设它装在 `~/.dsh/skills/`**——用户可能把它放在 `~/.claude/skills/` 或别处。运行环境一般会给（DSH 在 skill 内容里提供 `Base directory`），拿不到就用脚本所在目录。
 
 ```powershell
+$SKILL = "<本 SKILL.md 所在目录>"
 $T = Join-Path (Get-Location) ".agenttime"
 New-Item -ItemType Directory -Force -Path $T | Out-Null
-python "$env:USERPROFILE\.dsh\skills\agenttime\cli.py" scan --out "$T\facts.json"
+python "$SKILL\cli.py" scan --out "$T\facts.json"
 ```
+
+中间文件放**当前工作目录**下的 `.agenttime/`，不要用 `$env:TEMP`：在 DSH 的沙箱里，会话 TEMP 是 `Temp\dsh-xxxx`，提权进程的是 `Temp`，中途提权会找不到文件。
 
 输出一份 `facts.json`。若报错（找不到数据源、没有时间戳），先跑 `cli.py doctor` 看这台机器上能读到什么，把结果告诉用户并停下。
 
@@ -36,7 +39,7 @@ python "$env:USERPROFILE\.dsh\skills\agenttime\cli.py" scan --out "$T\facts.json
 ### 第三步：渲染
 
 ```powershell
-python "$env:USERPROFILE\.dsh\skills\agenttime\cli.py" render "$T\facts.json" "$T\narrative.json"
+python "$SKILL\cli.py" render "$T\facts.json" "$T\narrative.json"
 ```
 
 默认写 `~/Desktop/agenttime_report_YYYYMMDD.html`。写不进去（沙箱）时会自动回退到当前目录并打印真实路径。
@@ -161,6 +164,20 @@ quality               {dirs, ok, skipped_no_user, read_error, filtered_injected}
 安静、克制、不煽情。像某个下午坐下来，把一本账翻完。
 
 不要「你是最棒的」，不要「让我们一起」，不要「这一年你收获了」。
+
+## 数据源差异
+
+不同 agent 能提供的东西不一样，报告要按实际有的数据收缩：
+
+| 数据源 | 对话 | 思考量 | 工具调用 | 审批次数 |
+|---|---|---|---|---|
+| dsh | ✓ | ✓ | ✓ | ✓ |
+| claude_code | ✓ | ✓ | ✓ | ✗ |
+| zcode | ✓ | ✓ | ✓ | ✗ |
+| codex | 常为空 | ✗ | ✗ | ✗ |
+
+- Codex 的本地日志里 `UserMessage` 经常被系统提示占满（实测一台机器 74 个会话全是注入），读不出真人输入时 doctor 会报 0 个会话。这时直接告诉用户「Codex 的本地日志里没有可读的对话」，不要换源硬凑
+- 缺哪一类数据，就少做对应的卡片。没有审批就不做「行不行」，没有工具就不做「我替你敲了多少次键」
 
 ## 数据口径
 
