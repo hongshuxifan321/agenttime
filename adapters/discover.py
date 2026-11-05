@@ -19,7 +19,7 @@ _SKIP_DIRS = {
     ".m2", ".cargo", ".rustup", ".pyenv", ".conda", ".ipython", ".jupyter",
     ".matplotlib", ".anaconda", ".virtualenvs", ".bun", ".pnpm-store", ".yarn",
     ".android", ".azure", ".aws", ".kube", ".terraform.d", ".statamcp",
-    ".dsh", ".codex", ".zcode", ".claude",          # 已适配的，由 adapter 自己报
+    ".dsh",                                          # 已适配，由 adapter 自己报
 }
 
 # 目录名带这些词，就把里面的 json/jsonl 全算作候选
@@ -85,7 +85,7 @@ def _scan_depth2(root: str, max_entries: int = 5000) -> list[str]:
             name = e2.name
             if _is_db(name):
                 # 数据库要靠目录名佐证，不然会把各种缓存 db 算进来
-                if dir_hint or _dir_hint(os.path.dirname(e1.path)):
+                if dir_is_hint or _dir_hint(os.path.dirname(e1.path)):
                     hits.append(os.path.join(e1.name, name))
             elif _is_json(name) and (_dir_hint(e1.name) or _file_hint(name)):
                 hits.append(os.path.join(e1.name, name))

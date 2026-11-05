@@ -47,33 +47,49 @@ python cli.py render facts.json narrative.json
 
 中间文件建议放当前目录的 `.agenttime/`，不用 `$env:TEMP`——沙箱会话的 TEMP 和提权进程的不是同一个目录（前者带 `dsh-xxxx` 后缀），中途提权会找不到文件。
 
-## 支持的 agent
+## 支持范围
 
-| agent | 日志位置 | 状态 |
-|---|---|---|
-| DeepSeek Harness | `~/.dsh/sessions` | 真机验证 |
-| Claude Code | `~/.claude/projects` | fixture 验证（本机无真机数据） |
-| ZCode | `~/.zcode/cli/db/db.sqlite` | 真机验证 |
-| 锐识 AI (raixis) | `~/.raixis/sessions` | 真机验证 |
-| Codex | `~/.codex/sessions` | 能读文件，但**读不到真人输入**（见下） |
+**现在只官方支持 DeepSeek Harness**——它是唯一在真机上验证过的源（`~/.dsh/sessions`）。
 
-`doctor` 除了探测上面这几个，还会扫一遍你的主目录，把「看起来像对话数据、但还没有 adapter」的地方列出来。装了别的 agent 时能看到它还缺什么，而不是一片空白。
+其他 agent 的日志格式差异很大：有的把系统提示混进用户消息，有的把思考内容加密，有的根本不在本地留记录。没验证过的 adapter 发出来只会给人错误的期待，所以先只放一个。
 
-各源能提供的数据不一样，缺的就少做几张卡：
+但 agenttime 不会假装看不见别的 agent。`doctor` 会主动扫一遍你的主目录，把「看起来像对话数据、但还没有 adapter」的地方列出来：
 
-| | 对话 | 思考量 | 工具调用 | 审批 |
-|---|---|---|---|---|
-| DSH | ✓ | ✓ | ✓ | ✓ |
-| Claude Code | ✓ | ✓ | ✓ | ✗ |
-| ZCode | ✓ | ✓ | ✓ | ✗ |
-| raixis | ✓ | ✗ | ✗ | ✗ |
-| Codex | 常为空 | ✗ | ✗ | ✗ |
+```
+找到 1 个数据源：
 
-**关于 Codex**：它的 rollout 日志里，`response_item` 的 `role=user` 是发给模型的完整请求（混着 30K 字符的系统提示），而 `event_msg` 的 `UserMessage` 实测也全是系统提示。sqlite 里只有线程目录、没有消息内容。所以 adapter 保留着，但通常读不出东西——这比拿系统提示凑一份报告诚实。
+  dsh  ~/.dsh/sessions
+    89 个会话 · 1,367 条真人消息
+    挡掉系统注入 1,257 条
 
-Claude Code 的 adapter 按[公开的会话格式文档](https://github.com/neilberkman/ccrider/blob/v1.1.8/research/schema.md)写的，用 `tests/fixtures/` 里手工构造的会话回归测试。如果你有真实的 Claude Code 会话，跑一次 `python cli.py doctor` 就能确认读不读得到。
+还有一些地方像对话数据，但还没有 adapter：
 
-加一个新 agent = 在 `adapters/` 下写一个文件，实现 `detect()` 和 `load()`，然后在 `adapters/__init__.py` 的 `REGISTRY` 里加一行。统计和渲染都不用动。
+  ~/.raixis
+    发现 3 个候选文件，例如 sessions/159ef894-....json
+  ~/.codex
+    发现 2 个候选文件，例如 session_index.jsonl
+```
+
+判断偏保守：目录名或文件名要带 `session` / `chat` / `conversation` / `history` / `thread` 才认，数据库还要目录名佐证。宁可漏报，也不要把审计日志当成对话。
+
+## 加一个数据源
+
+写一个文件，实现两个函数：
+
+```python
+# adapters/your_agent.py
+def detect() -> str | None:
+    """返回数据根目录；没有就返回 None。"""
+    ...
+
+def load(root: str) -> tuple[list[Session], LoadReport]:
+    """读成统一结构。只放真人消息，系统注入全部挡掉。"""
+    ...
+```
+
+然后在 `adapters/__init__.py` 的 `REGISTRY` 加一行。统计和渲染都不用动。
+
+重点是 `load()` 里的注入过滤——这是整个项目最容易做错的地方。DSH 有 `source.kind == "user"` 这种干净字段，别的 agent 往往没有，得靠 `isMeta`、`synthetic`、XML 标签之类的特征自己判断。判断不干净的话，报告里的高频词会全是系统提示。
 
 ## 环境要求
 
