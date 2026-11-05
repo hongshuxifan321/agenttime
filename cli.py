@@ -53,11 +53,8 @@ def cmd_doctor(_args) -> int:
     if not found:
         print("没有找到可读的会话记录。")
         print()
-        print("agenttime 现在支持：")
-        print("  DeepSeek Harness   ~/.dsh/sessions")
-        print("  Claude Code        ~/.claude/projects")
-        print("  ZCode              ~/.zcode/cli/db/db.sqlite")
-        print("  Codex              ~/.codex/sessions")
+        print("agenttime 现在官方支持 DeepSeek Harness（~/.dsh/sessions）。")
+        print("如果你用过别的 agent，看下面有没有它的痕迹——有的话可以写一个 adapter。")
         print()
         _report_unknown([r for _, r in found])
         return 1

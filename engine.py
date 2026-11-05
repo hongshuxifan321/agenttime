@@ -17,7 +17,7 @@ RE_CONFIRM = re.compile(
     r"^(好的|好|ok|okay|可以|行|嗯|没错|没问题|对的|对|是的|收到)\W*$", re.I)
 
 # 英文词要删掉路径/URL/代码残片：先把整段路径与 URL 抹掉再切词，
-# 否则 C:\Users\26957\Desktop 会被切成 users / desktop 这种高频假词
+# 否则 C:\Users\me\Desktop 会被切成 users / desktop 这种高频假词
 _STRIP_URLS = re.compile(
     r"(?:[A-Za-z]:[\\/][^\s，。；、）】\"']*)|(?:https?://\S+)|(?:[\w.-]+@[\w.-]+)")
 _PATHISH = re.compile(r"[\\/:@#$%^&*<>|{}\[\]`~=+]")

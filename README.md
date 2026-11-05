@@ -1,126 +1,163 @@
 # Agenttime
 
-把本机的 AI 对话历史整理成一份**卡片流 + 散文**的个人回顾。数据全部本地处理，不联网、不上传。
+Turn your local AI conversation history into a personal retrospective: a stream of cards, then an essay. Everything is read locally. No network, no upload.
 
-## 这是什么
+**English** · [简体中文](README.zh-CN.md)
 
-先 13 张卡片把三个月的事实摊开——第一句话是什么时候、一共坐下多少次、最密的一天说了多少句、你输入多少字而它想了多少字——最后用一篇散文写卡片讲不到的部分。
+![Cover](docs/cover.png)
 
-不是效率报告，不是仪表盘。是一份可以翻的东西。
+## What it is
 
-## 安装
+Thirteen cards lay out the facts first — when you first spoke, how many times you sat down, how many sentences the busiest day held, how much you typed versus how much it thought. Then an essay covers what the cards cannot: the empty days, the things left unsaid, the half you never see.
 
-把这个目录放进 `~/.dsh/skills/agenttime`（目录名即 skill 名）。
+It is not a productivity report or a dashboard. It is something you can leaf through.
 
-依赖：`zstandard`（读 DSH 会话日志用）。
+![Card stream](docs/cards.png)
+
+![Essay](docs/essay.png)
+
+## Why
+
+Spotify Wrapped and the annual reports Chinese apps ship every December all do the same thing: they give a person a shape for behaviour that was scattered across a year.
+
+Agenttime does that for AI conversations. The extra bit of self-interest: it is written by the AI, in first person.
+
+So the report contains lines like "I cut your messages wherever the gap exceeded ninety minutes" and "you never see any of these characters." The numbers are cold; the one writing them sits right beside them.
+
+## Install
+
+Script (recommended):
+
+```powershell
+.\install.ps1
+```
+
+```bash
+./install.sh
+```
+
+The script looks for skill directories that already exist on this machine — `~/.dsh/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.config/agents/skills` — and installs into every one it finds. If none exists, it uses `~/.dsh/skills`.
+
+| Flag | Effect |
+|---|---|
+| `-Target <dir>` / `-t <dir>` | Install into a specific directory |
+| `-Link` / `-l` | Symlink instead of copying, so edits apply immediately (on Windows this needs Developer Mode or an elevated shell; falls back to copying) |
+| `-Force` / `-f` | Overwrite an existing install without asking |
+
+Manual: copy the whole directory to `<skills>/agenttime`. The directory name must be `agenttime`.
+
+Dependency:
 
 ```powershell
 pip install zstandard
 ```
 
-## 使用
+Only needed to read DeepSeek Harness logs. Statistics and rendering are pure standard library.
 
-在 DeepSeek Harness 里输入 `/agenttime`，或说「回顾一下」。一会儿桌面上会多出一份 HTML。
+## Use
 
-## 文件结构
+Invoke the skill from your agent, or just say "review my conversations".
 
-| 文件 | 作用 |
-|---|---|
-| `SKILL.md` | skill 定义，AI 读这个 |
-| `cli.py` | 命令行入口：doctor / scan / render |
-| `engine.py` | 统计层，吃统一会话结构，产出 `facts.json` |
-| `adapters/` | 各 agent 的日志解析，每个 agent 一个文件 |
-| `render.py` | 读 `facts.json` + `narrative.json` + 模板，输出单文件 HTML |
-| `template.html` | 版式：封面 / 卡片流 / 转场 / 散文 / 页脚 |
-| `narrative.example.json` | 叙事示例，AI 照着写每次的 `narrative.json` |
-
-## 手动跑
+Or run it by hand:
 
 ```powershell
-python cli.py doctor                 # 看看能读到哪些会话
-python cli.py scan --out facts.json  # 统计
-# 写 narrative.json（照 narrative.example.json 的结构）
+python cli.py doctor                       # what can be read on this machine
+python cli.py scan --out facts.json        # statistics
+# write narrative.json (follow narrative.example.json)
 python cli.py render facts.json narrative.json
 ```
 
-默认输出 `~/Desktop/agenttime_report_YYYYMMDD.html`，桌面不可写时回退到当前目录并打印真实路径。
+Output defaults to `~/Desktop/agenttime_report_YYYYMMDD.html`. If the desktop is not writable it falls back to the current directory and prints the real path.
 
-中间文件建议放当前目录的 `.agenttime/`，不用 `$env:TEMP`——沙箱会话的 TEMP 和提权进程的不是同一个目录（前者带 `dsh-xxxx` 后缀），中途提权会找不到文件。
+Keep intermediates in `.agenttime/` under the current directory rather than `$env:TEMP`: inside the DSH sandbox the session TEMP is `Temp\dsh-xxxx` while an elevated process gets `Temp`, so files go missing halfway through.
 
-## 支持范围
+## Three layers
 
-**现在只官方支持 DeepSeek Harness**——它是唯一在真机上验证过的源（`~/.dsh/sessions`）。
+| Layer | Who | Output |
+|---|---|---|
+| Statistics | `engine.py`, pure computation, no file access | `facts.json` |
+| Narrative | the AI writes it — the only layer that needs judgement | `narrative.json` |
+| Rendering | `render.py` + `template.html` | one HTML file |
 
-其他 agent 的日志格式差异很大：有的把系统提示混进用户消息，有的把思考内容加密，有的根本不在本地留记录。没验证过的 adapter 发出来只会给人错误的期待，所以先只放一个。
+`narrative.json` contains no digits, only placeholders like `{volume.msgs|comma}` resolved against `facts.json` at render time. Every number in the prose therefore matches the data; the AI cannot invent one.
 
-但 agenttime 不会假装看不见别的 agent。`doctor` 会主动扫一遍你的主目录，把「看起来像对话数据、但还没有 adapter」的地方列出来：
+## Files
+
+| File | Purpose |
+|---|---|
+| `SKILL.md` | skill definition, what the AI reads |
+| `cli.py` | command line: doctor / scan / render |
+| `engine.py` | statistics over the unified session model |
+| `adapters/` | one file per agent log format |
+| `adapters/discover.py` | finds conversation stores that have no adapter yet |
+| `render.py` | facts + narrative + template → single HTML |
+| `template.html` | layout: cover / cards / divider / essay / footer |
+| `narrative.example.json` | example narrative (fictional data, structure only) |
+| `install.ps1` / `install.sh` | installers |
+
+## Data sources: DSH first, discovery for the rest
+
+Only **DeepSeek Harness** (`~/.dsh/sessions`) is officially supported today.
+
+It is the only source verified against real data. Other agent log formats differ a lot: some mix a system prompt into user messages, some encrypt the reasoning, some record nothing locally at all. Shipping an adapter nobody has validated would only create false expectations.
+
+But agenttime does not pretend other agents do not exist. `doctor` scans your home directory and lists places that look like conversation data but have no adapter yet:
 
 ```
-找到 1 个数据源：
+found 1 source:
 
   dsh  ~/.dsh/sessions
-    89 个会话 · 1,367 条真人消息
-    挡掉系统注入 1,257 条
+    40 sessions · 612 human messages
+    filtered 481 injected system messages
 
-还有一些地方像对话数据，但还没有 adapter：
+some places look like conversation data but have no adapter yet:
 
   ~/.raixis
-    发现 3 个候选文件，例如 sessions/159ef894-....json
+    3 candidate files, e.g. sessions/159ef894-....json
   ~/.codex
-    发现 2 个候选文件，例如 session_index.jsonl
+    2 candidate files, e.g. session_index.jsonl
 ```
 
-判断偏保守：目录名或文件名要带 `session` / `chat` / `conversation` / `history` / `thread` 才认，数据库还要目录名佐证。宁可漏报，也不要把审计日志当成对话。
+When it sees this, the skill tells the user honestly: there may be conversations here, but agenttime cannot read them yet. It will not substitute other data, and it will not quietly ignore them.
 
-## 加一个数据源
+Detection is deliberately conservative: a directory or file name must contain `session` / `chat` / `conversation` / `history` / `thread`, and databases additionally need a corroborating directory name. Better to miss one than to treat an audit log as a conversation.
 
-写一个文件，实现两个函数：
+## Adding a source
+
+Write one file under `adapters/` implementing two functions:
 
 ```python
-# adapters/your_agent.py
 def detect() -> str | None:
-    """返回数据根目录；没有就返回 None。"""
+    """Return the data root, or None if absent."""
     ...
 
 def load(root: str) -> tuple[list[Session], LoadReport]:
-    """读成统一结构。只放真人消息，系统注入全部挡掉。"""
+    """Read into the unified model. Human messages only; drop every injection."""
     ...
 ```
 
-然后在 `adapters/__init__.py` 的 `REGISTRY` 加一行。统计和渲染都不用动。
+Then add a line to `REGISTRY` in `adapters/__init__.py`. Statistics and rendering stay untouched.
 
-重点是 `load()` 里的注入过滤——这是整个项目最容易做错的地方。DSH 有 `source.kind == "user"` 这种干净字段，别的 agent 往往没有，得靠 `isMeta`、`synthetic`、XML 标签之类的特征自己判断。判断不干净的话，报告里的高频词会全是系统提示。
+The hard part is always the injection filter in `load()`. DSH has a clean field, `source.kind == "user"`; most agents do not, so you have to infer from `isMeta`, `synthetic`, XML tags and similar markers. Get it wrong and the top-words card fills up with system prompt text — this is the easiest thing in the project to get wrong.
 
-## 环境要求
+## Measurement notes
 
-- Python 3.10+（用了 `str | None` 语法）
-- `zstandard`：只有读 DSH 和 Codex 时需要，`pip install zstandard`
-- Claude Code / ZCode 只用标准库
-- macOS / Linux / Windows 都可以，路径用 `~` 展开
+- Only human input counts. DSH writes runtime context, `AGENTS.md` and the skill catalog as `user/message` events; these are dropped by requiring `data.source.kind == "user"`. On the machine this was built on, 2,608 such events contained only 1,360 genuine messages — injected text outweighed real input 92×
+- Timestamps come from human messages only, never from tool calls or title events
+- "Thinking volume" is the character length of reasoning blocks, not the block count
+- "A sitting" splits messages on gaps longer than 90 minutes, rather than using a session's first and last timestamp — sessions resume days later, and first/last arithmetic produces values like 453 hours
+- Unreadable sessions and sessions with no human messages are reported in `quality`, never skipped silently
 
-## 测试
+## Requirements
 
-```powershell
-python tests/test_claude_code.py
-```
+- Python 3.10+ (uses `str | None` syntax)
+- `zstandard`, only for DSH logs
+- Windows / macOS / Linux, paths expanded from `~`
 
-本机没有 Claude Code，测试用 fixtures 里按官方 schema 构造的会话，覆盖：summary 标题、tool_result、isMeta、system-reminder、command 标签、子代理 agent-*.jsonl。改 adapter 后先跑这个。
+## Privacy
 
-默认输出 `~/Desktop/agenttime_report_YYYYMMDD.html`，桌面不可写时回退到当前目录并打印真实路径。
+Everything runs locally. No network, no upload. The report is a single HTML file and you decide where it goes. Read it before you show it to anyone — it is made of your conversations.
 
-## 数据口径
+## License
 
-只在本地读 `~/.dsh/sessions`。
-
-DSH 会把运行时上下文、`AGENTS.md`、技能目录都写成 `user/message` 事件。这些不是用户说的话，必须按 `data.source.kind == "user"` 过滤掉——实测本机 2,608 条 `user/message` 里只有 1,360 条是真人输入，注入文本是真实输入的 92 倍。
-
-其余口径：
-
-- 时间戳只取真人消息，不混入工具调用和会话标题事件
-- 「思考量」取 reasoning 块的文本长度，不是块数
-- 「一次坐下」按消息间隔 90 分钟切分，不用会话首末时间
-- 读不出来 / 没有真人消息的会话记在 `quality` 里，不静默跳过
-
-## 隐私
-
-所有分析在本机完成。报告是一份 HTML，写到哪里由你决定；给别人看之前自己过一眼。
+MIT

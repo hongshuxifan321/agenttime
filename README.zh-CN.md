@@ -1,0 +1,163 @@
+# Agenttime
+
+把本机 AI 对话历史整理成一份「卡片流 + 散文」的个人回顾。全部本地读取，不联网，不上传。
+
+[English](README.md) · **简体中文**
+
+![封面](docs/cover.png)
+
+## 它是什么
+
+先用 13 张卡片把事实摊开——第一次说话是什么时候、一共坐下多少次、最密的一天说了几句、你输入多少字而它想了多少字。然后是一篇散文，写卡片讲不到的部分：空着的那些天、没说出口的话、看不见的那一半。
+
+不是效率报告，不是仪表盘。是一份可以翻的东西。
+
+![卡片流](docs/cards.png)
+
+![散文](docs/essay.png)
+
+## 为什么做这个
+
+网易云音乐的年度报告、Spotify 的 Wrapped，做的其实是同一件事：把人散落在一年里的行为，还他一个形状。
+
+agenttime 想给 AI 对话做同样的事。多出来的一点私心是——它由 AI 自己写，用第一人称。
+
+所以报告里会有「我把你的话按隔开超过一个半小时切开」「这些字你一个也看不见」这样的句子。数字是冷的，但写数字的人就在旁边。
+
+## 安装
+
+用脚本（推荐）：
+
+```powershell
+.\install.ps1
+```
+
+```bash
+./install.sh
+```
+
+脚本会找这台机器上已有的 skills 目录——`~/.dsh/skills`、`~/.claude/skills`、`~/.codex/skills`、`~/.config/agents/skills`——装到每一个找到的地方。一个都没有就用 `~/.dsh/skills`。
+
+| 参数 | 作用 |
+|---|---|
+| `-Target <dir>` / `-t <dir>` | 装到指定目录 |
+| `-Link` / `-l` | 用符号链接，改代码立即生效（Windows 需要开发者模式或管理员；失败会回退成复制） |
+| `-Force` / `-f` | 覆盖已安装的版本，不再询问 |
+
+手动装：把整个目录复制到 `<skills>/agenttime`。目录名必须是 `agenttime`。
+
+依赖：
+
+```powershell
+pip install zstandard
+```
+
+只有读 DSH 日志时需要，统计和渲染是纯标准库。
+
+## 使用
+
+在 agent 里调用这个 skill，或者直接说「回顾一下」。
+
+也可以手动跑：
+
+```powershell
+python cli.py doctor                       # 看这台机器上能读到什么
+python cli.py scan --out facts.json        # 统计
+# 写 narrative.json（照 narrative.example.json 的结构）
+python cli.py render facts.json narrative.json
+```
+
+默认输出 `~/Desktop/agenttime_report_YYYYMMDD.html`。桌面写不进去时回退到当前目录，并打印真实路径。
+
+中间文件建议放当前目录的 `.agenttime/`，不要用 `$env:TEMP`：在 DSH 沙箱里，会话的 TEMP 是 `Temp\dsh-xxxx`，提权进程的是 `Temp`，中途提权会找不到文件。
+
+## 三层结构
+
+| 层 | 谁做 | 产出 |
+|---|---|---|
+| 统计 | `engine.py`，纯计算，不碰文件 | `facts.json` |
+| 叙事 | AI 写，唯一需要动脑的一层 | `narrative.json` |
+| 渲染 | `render.py` + `template.html` | 单个 HTML |
+
+`narrative.json` 里不写数字，只写 `{volume.msgs|comma}` 这样的占位符，渲染时从 `facts.json` 取值。所以文案里的每个数字都和数据一致，AI 编不出来。
+
+## 文件
+
+| 文件 | 作用 |
+|---|---|
+| `SKILL.md` | skill 定义，AI 读这个 |
+| `cli.py` | 命令行入口：doctor / scan / render |
+| `engine.py` | 统计层，吃统一会话结构，产出 facts |
+| `adapters/` | 各 agent 的日志解析，每个 agent 一个文件 |
+| `adapters/discover.py` | 主动发现：找没有 adapter 的对话数据 |
+| `render.py` | facts + narrative + 模板 → 单文件 HTML |
+| `template.html` | 版式：封面 / 卡片流 / 转场 / 散文 / 页脚 |
+| `narrative.example.json` | 叙事示例（虚构数据，只用来看结构） |
+| `install.ps1` / `install.sh` | 安装脚本 |
+
+## 数据源：先支持 DSH，其余交给主动发现
+
+现在只官方支持 **DeepSeek Harness**（`~/.dsh/sessions`）。
+
+它是唯一在真机上验证过的源。别的 agent 日志格式差异很大：有的把系统提示混进用户消息，有的把思考内容加密，有的根本不在本地留记录。没验证过的 adapter 发出来，只会给人错误的期待。
+
+但 agenttime 不假装看不见别的 agent。`doctor` 会扫一遍主目录，把「看起来像对话数据、但还没有 adapter」的地方列出来：
+
+```
+找到 1 个数据源：
+
+  dsh  ~/.dsh/sessions
+    40 个会话 · 612 条真人消息
+    挡掉系统注入 481 条
+
+还有一些地方像对话数据，但还没有 adapter：
+
+  ~/.raixis
+    发现 3 个候选文件，例如 sessions/159ef894-....json
+  ~/.codex
+    发现 2 个候选文件，例如 session_index.jsonl
+```
+
+看到这种输出，skill 会如实告诉用户：这里可能有对话，但 agenttime 还读不了。不会拿别的数据顶上，也不会假装没看见。
+
+判断偏保守：目录名或文件名要带 `session` / `chat` / `conversation` / `history` / `thread` 才认，数据库还要目录名佐证。宁可漏报，也不要把审计日志当成对话。
+
+## 加一个数据源
+
+在 `adapters/` 下写一个文件，实现两个函数：
+
+```python
+def detect() -> str | None:
+    """返回数据根目录；没有就返回 None。"""
+    ...
+
+def load(root: str) -> tuple[list[Session], LoadReport]:
+    """读成统一结构。只放真人消息，系统注入全部挡掉。"""
+    ...
+```
+
+然后在 `adapters/__init__.py` 的 `REGISTRY` 加一行。统计和渲染都不用动。
+
+难点全在 `load()` 的注入过滤。DSH 有 `source.kind == "user"` 这种干净字段，别的 agent 往往没有，得靠 `isMeta`、`synthetic`、XML 标签之类的特征自己判断。判断不干净的话，报告里的高频词会全是系统提示——这是这个项目最容易做错的地方。
+
+## 数据口径
+
+- 只统计真人输入。DSH 会把运行时上下文、`AGENTS.md`、技能目录都写成 `user/message` 事件，必须按 `data.source.kind == "user"` 剔除。实测在一条 2,608 条 `user/message` 的日志里，只有 1,360 条是真人输入，注入文本是真实输入的 92 倍
+- 时间戳只取真人消息，不混入工具调用和会话标题事件
+- 「思考量」取 reasoning 块的文本长度，不是块数
+- 「一次坐下」按消息间隔 90 分钟切分，不用会话首末时间——会话可以隔几天恢复，用首末时间会算出 453 小时这种数
+- 读不出来、没有真人消息的会话记在 `quality` 里，不静默跳过
+
+## 环境
+
+- Python 3.10+（用了 `str | None` 语法）
+- `zstandard`，只有读 DSH 时用
+- Windows / macOS / Linux，路径统一用 `~` 展开
+
+## 隐私
+
+所有分析在本机完成，不联网，不上传。报告是一份 HTML，写到哪里由你决定。给别人看之前自己过一眼——它写的是你的对话。
+
+## 许可
+
+MIT

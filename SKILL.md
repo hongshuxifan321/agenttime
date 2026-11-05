@@ -34,6 +34,8 @@ python "$SKILL\cli.py" scan --out "$T\facts.json"
 
 读 `facts.json`，照 `narrative.example.json` 的结构写一份 `narrative.json`（同样放在 `.agenttime/` 里）。
 
+**`narrative.example.json` 里的人、日期、项目名全是虚构的**。它只示范结构和语气，内容一律要换成这台机器上的真实数据。照着抄会得到一份不属于这个人的报告——`kicker` 里的日期尤其要改，它是用来看的，不参与占位符替换。
+
 **这里是你唯一要动脑的地方**，规则见下方「写作要求」。
 
 ### 第三步：渲染
@@ -57,7 +59,7 @@ python "$SKILL\cli.py" render "$T\facts.json" "$T\narrative.json"
   "cards": [
     {
       "idx": "01",
-      "kicker": "2026 年 8 月 14 日 — 11 月 5 日",
+      "kicker": "2026 年 3 月 2 日 — 6 月 16 日",
       "num": "{volume.sessions}",
       "unit": "场",
       "fact": "你和我之间，一共 <b>{volume.sessions}</b> 场对话，<b>{volume.msgs|comma}</b> 句话。",
@@ -65,7 +67,7 @@ python "$SKILL\cli.py" render "$T\facts.json" "$T\narrative.json"
     }
   ],
   "essay": [
-    "8 月 14 日下午三点五十分，你打开我，说：「{span.first_text}」。",
+    "第一天是三月的一个下午。你打开我，说：「{span.first_text}」。",
     "我没有问为什么叫这个名字，你也没有说。"
   ]
 }
@@ -85,57 +87,65 @@ python "$SKILL\cli.py" render "$T\facts.json" "$T\narrative.json"
 
 文案里写 `{路径}`，渲染时从 `facts.json` 取值替换。支持三个过滤器：
 
-- `{path|comma}` → 千分位：`16,183`
-- `{path|round}` → 取整：`220`
-- `{path|cnwan}` → 中文万数：`十一万`、`两千四百八十一万`
+- `{path|comma}` → 千分位：`16,794`
+- `{path|round}` → 取整：`102`
+- `{path|cnwan}` → 中文万数：`四万`、`四百四十七万`
 
 **不要手写数字**。能取就取，取不到再自己写。
+
+### 有些值是空的
+
+数据里没有的东西，`facts.json` 里就是 `null` 或空列表——`rhythm.latest`（没有凌晨消息时）、`deepest_project`（没有工具调用时）、`words.longest` 之类。它们渲染出来是空字符串，句子会断成「最晚的一次，是 。」
+
+写之前先在 `facts.json` 里看一眼。为空就不要写那句话，也不要用那个占位符。`render.py` 会在最后打一行 `[warn] 这些占位符在 facts.json 里找不到`，看到它就是要改。
+
+同理，卡片本身也要跟着数据走：没有凌晨活动就不做「深夜」卡，没有打断就不做「算了」卡。
 
 ## 可用路径
 
 ```
-span.first            第一次对话，2026-08-14 15:50
-span.first_time       15:50
+span.first            第一次对话，2026-03-02 15:29
+span.first_time       15:29
 span.first_text       第一句话原文
-span.total_days       84
+span.total_days       107
 span.last             最后一次对话时间
 
-volume.sessions       89        会话数
-volume.msgs           1,355     真人消息数
-volume.chars          112,869   真人输入总字符
-volume.avg_chars      83.5      平均每句字数
+volume.sessions       40        会话数
+volume.msgs           612       真人消息数
+volume.chars          43,661    真人输入总字符
+volume.avg_chars      71.3      平均每句字数
 
-rhythm.active_days    42        来过的天数
-rhythm.max_streak     16        最长连续
-rhythm.sittings       76        一次坐下的次数（间隔 90 分钟切分）
-rhythm.avg_per_sitting 17.8     每次平均句数
-rhythm.busiest_day    2026-08-16
-rhythm.busiest_n      139       最密那天的句数
+rhythm.active_days    43        来过的天数
+rhythm.max_streak     6         最长连续
+rhythm.sittings       92        一次坐下的次数（间隔 90 分钟切分）
+rhythm.avg_per_sitting 6.7      每次平均句数
+rhythm.busiest_day    2026-05-09
+rhythm.busiest_n      59        最密那天的句数
 rhythm.busiest_titles [[标题, 句数], ...]   最密那天的会话
-rhythm.peak_hour      10
-rhythm.peak_count     151
+rhythm.peak_hour      18
+rhythm.peak_count     65
 rhythm.hour_dist      24 小时分布 {0..23: 次数}
-rhythm.late_msgs      29        凌晨 0-5 点的消息数
-rhythm.late_sessions  10
-rhythm.latest         10 月 10 日 01:45
+rhythm.late_msgs      57        凌晨 0-5 点的消息数
+rhythm.late_sessions  9
+rhythm.latest         06 月 05 日 00:03
 
 words.shortest        {len, text}    最短的一句
 words.longest         {len, text}    最长的一句
-words.thanks          0              「谢谢」出现次数
-words.confirms        24
-words.interrupts      38             打断词出现次数
+words.thanks          1              「谢谢」出现次数
+words.confirms        1
+words.interrupts      117            打断词出现次数
 words.en              [[英文词, 次数], ...]
 words.cn              [[中文词, 次数], ...]
 
-agent.tools_total     16,183
+agent.tools_total     16,794
 agent.tools_top       [[工具名, 次数], ...]
-agent.tools_by_name   按名字取，如 agent.tools_by_name.pwsh
-agent.reasoning_chars 24,819,142     思考总字符
-agent.ratio           220            用户每 1 字对应多少思考字
-agent.read_days       29             按每秒 10 字读完全部思考要几天
-agent.approvals_asked 2,534
-agent.approvals_granted 2,523
-agent.denied          11
+agent.tools_by_name   按名字取，如 agent.tools_by_name.write
+agent.reasoning_chars 4,476,447      思考总字符
+agent.ratio           102.5          用户每 1 字对应多少思考字
+agent.read_days       5              按每秒 10 字读完全部思考要几天
+agent.approvals_asked 714
+agent.approvals_granted 698
+agent.denied          16
 
 projects              [{title, n, start, end, tools}, ...]  最多 10 条
 deepest_project       {title, n, start, end, tools}         工具调用最多的那条

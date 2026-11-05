@@ -1,0 +1,14 @@
+# 默认按文本处理，checkout 时用平台换行
+* text=auto
+
+# shell 脚本必须是 LF，否则 #!/usr/bin/env bash 后面带上 \r，bash 找不到解释器
+*.sh text eol=lf
+
+# PowerShell 沿用 Windows 换行
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+
+# 图片不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary

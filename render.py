@@ -141,6 +141,31 @@ def card_html(card, facts):
     return "\n".join(parts)
 
 
+def _headline(facts) -> str:
+    """封面标题。按真实跨度说「这些天 / 这几个月 / 这一年多」，
+    不写死个月数——别人可能只用了两周，也可能用了两年。"""
+    span = facts.get("span", {}) or {}
+    try:
+        days = int(span.get("total_days") or 0)
+    except (TypeError, ValueError):
+        days = 0
+    months = max(1, round(days / 30))
+    if days <= 45:
+        head = "这些天"
+    elif months <= 12:
+        head = f"这 {months} 个月"
+    else:
+        head = "这一年多"
+    return f"{head}的<br>一些记录"
+
+
+def _daterange(facts) -> str:
+    span = facts.get("span", {}) or {}
+    first = str(span.get("first") or "")[:10].replace("-", ".")
+    last = str(span.get("last") or "")[:10].replace("-", ".")
+    return f"{first} — {last}" if first and last else ""
+
+
 def default_out() -> str:
     name = f"agenttime_report_{date.today().strftime('%Y%m%d')}.html"
     return os.path.join(os.path.expanduser("~"), "Desktop", name)
@@ -190,7 +215,10 @@ def main(argv: list[str]) -> int:
     cards = "\n\n".join(card_html(c, facts) for c in narrative["cards"])
     essay = "\n".join(f"<p>{subst(p, facts)}</p>" for p in narrative["essay"])
 
-    page = tpl.replace("<!-- CARDS -->", cards).replace("<!-- ESSAY -->", essay)
+    page = (tpl.replace("<!-- HEADLINE -->", _headline(facts))
+               .replace("<!-- RANGE -->", _daterange(facts))
+               .replace("<!-- CARDS -->", cards)
+               .replace("<!-- ESSAY -->", essay))
     if MISSING:
         print("[warn] 这些占位符在 facts.json 里找不到，已渲染为空："
               + "、".join(sorted(MISSING)))
