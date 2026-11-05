@@ -3,62 +3,168 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>工作回顾 — Agenttime</title>
+<title>这三个月的记录</title>
+<script>document.documentElement.classList.add("js");</script>
 <style>
-  :root {
-    --bg: #faf9f7; --text: #2c2c2c; --accent: #b8a080; --inset: #f3f0eb;
-    --border: #e8e4df; --muted: #999; --faint: #bbb;
+  :root{
+    --bg:#faf8f4; --text:#2f2b26; --muted:#8a8378; --faint:#c9c2b6;
+    --accent:#a8895f; --line:#eae4da; --card:#fffdf9;
   }
-  [data-theme="dark"] {
-    --bg: #1a1a18; --text: #d0ccc4; --accent: #9a8a6a; --inset: #242320;
-    --border: #33312e; --muted: #888; --faint: #666;
+  [data-theme="dark"]{
+    --bg:#171614; --text:#cfc8bd; --muted:#8a8378; --faint:#565049;
+    --accent:#b08f66; --line:#2a2724; --card:#1d1b19;
   }
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
   body{
-    font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",Georgia,serif;
-    background:var(--bg);color:var(--text);line-height:1.9;
-    max-width:680px;margin:0 auto;padding:80px 24px 180px;
-    transition:background .4s,color .4s;font-size:1.02rem;
+    background:var(--bg); color:var(--text);
+    font-family:"Source Han Serif SC","Noto Serif SC","Songti SC",STSong,SimSun,Georgia,serif;
+    font-size:1.02rem; line-height:2.0; letter-spacing:.01em;
+    max-width:640px; margin:0 auto; padding:0 28px 200px;
+    transition:background .5s,color .5s;
+    -webkit-font-smoothing:antialiased;
   }
+  /* 顶部细进度线 */
+  .bar{position:fixed;top:0;left:0;height:2px;width:0;background:var(--accent);
+       z-index:90;transition:width .1s linear;opacity:.5}
+  /* 日夜 */
   .theme-btn{
-    position:fixed;top:20px;right:24px;width:36px;height:36px;
-    border-radius:50%;border:1px solid var(--border);background:var(--bg);
-    cursor:pointer;font-size:1.1rem;display:flex;align-items:center;justify-content:center;
-    z-index:100;transition:all .3s;color:var(--muted);
+    position:fixed;top:22px;right:22px;width:34px;height:34px;border-radius:50%;
+    border:1px solid var(--line);background:transparent;color:var(--faint);
+    cursor:pointer;font-size:.95rem;display:flex;align-items:center;justify-content:center;
+    z-index:100;transition:all .4s;
   }
-  .theme-btn:hover{border-color:var(--accent);color:var(--text)}
-  h1{font-size:2rem;font-weight:300;letter-spacing:.04em;margin-bottom:8px}
-  .dateline{color:var(--muted);font-size:.9rem;margin-bottom:56px}
-  p{margin-bottom:22px;text-align:justify}
-  .n{font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}
-  .w{font-weight:500;color:var(--accent)}
-  .appendix{margin-top:72px;padding-top:40px;border-top:1px solid var(--border)}
-  .appendix-title{color:var(--muted);font-size:.82rem;margin-bottom:16px}
-  .word-cloud{display:flex;flex-wrap:wrap;gap:2px 8px;line-height:1.6}
-  .wd{color:var(--muted)}
-  .wd:nth-child(-n+8){font-size:1.2em;color:var(--text)}
-  .wd:nth-child(n+9):nth-child(-n+20){font-size:1.02em;color:var(--muted)}
-  .wd:nth-child(n+21){font-size:.82em;color:var(--faint)}
-  .footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--border);color:var(--faint);font-size:.82rem}
-  .footer a{color:var(--accent);text-decoration:none}
+  .theme-btn:hover{color:var(--text);border-color:var(--accent)}
+  /* 封面 */
+  .cover{min-height:88vh;display:flex;flex-direction:column;justify-content:center;
+         padding:140px 0 170px;text-align:center}
+  .eyebrow{font-size:.68rem;letter-spacing:.42em;color:var(--faint);
+           text-transform:uppercase;margin-bottom:52px}
+  .cover h1{font-size:1.7rem;font-weight:300;line-height:2.1;letter-spacing:.06em}
+  .range{margin-top:52px;font-size:.8rem;color:var(--muted);letter-spacing:.18em}
+  /* 卡片 */
+  .cards{display:flex;flex-direction:column;gap:172px;margin-top:60px}
+  .card{
+    opacity:1; transform:none;
+    transition:opacity 1.1s cubic-bezier(.22,.61,.36,1),transform 1.1s cubic-bezier(.22,.61,.36,1);
+  }
+  /* 只有在 JS 可用时才启用淡入；脚本失败或禁用时内容照常可见 */
+  .js .card{opacity:0;transform:translateY(26px)}
+  .js .card.in{opacity:1;transform:none}
+  .idx{font-size:.66rem;letter-spacing:.3em;color:var(--muted);opacity:.5;margin-bottom:30px;
+       font-variant-numeric:tabular-nums}
+  .kicker{font-size:.82rem;color:var(--muted);letter-spacing:.12em;margin-bottom:26px}
+  .num{font-size:4.6rem;font-weight:300;line-height:1.05;letter-spacing:-.015em;
+       font-family:Georgia,"Times New Roman","Songti SC",serif;
+       font-variant-numeric:tabular-nums;color:var(--text)}
+  .num .unit{font-size:1rem;font-weight:400;letter-spacing:.1em;
+             margin-left:.5em;color:var(--muted);vertical-align:.35em}
+  .fact{font-size:1.06rem;margin-top:30px;line-height:2.05}
+  .fact b{font-weight:500;color:var(--accent);font-variant-numeric:tabular-nums}
+  .aside{font-size:.92rem;color:var(--muted);margin-top:22px;line-height:1.95}
+  /* 列表卡 */
+  .lines{list-style:none;margin-top:34px}
+  .lines li{padding:15px 0;border-bottom:1px solid var(--line);
+            display:flex;justify-content:space-between;gap:20px;align-items:baseline}
+  .lines li:last-child{border-bottom:none}
+  .lines .t{font-size:.98rem}
+  .lines .m{font-size:.78rem;color:var(--faint);white-space:nowrap;
+            font-variant-numeric:tabular-nums}
+  .chips{display:flex;flex-wrap:wrap;gap:14px 20px;margin-top:34px;align-items:baseline}
+  .chips span{font-size:1.02rem;color:var(--muted);letter-spacing:.04em}
+  .chips span:nth-child(-n+3){color:var(--text);font-size:1.32rem}
+  .chips span:nth-child(n+4):nth-child(-n+6){color:var(--text);font-size:1.1rem}
+  /* 转场 */
+  .turn{margin:200px 0 150px;text-align:center;color:var(--faint);
+        font-size:.82rem;letter-spacing:.24em}
+  .turn span{display:inline-block;padding:0 24px;position:relative}
+  .turn span::before,.turn span::after{content:"";position:absolute;top:50%;width:46px;
+        height:1px;background:var(--line)}
+  .turn span::before{right:100%}
+  .turn span::after{left:100%}
+  /* 散文 */
+  .essay p{margin-bottom:1.32em;text-indent:2em;text-align:justify}
+  .essay p.plain{text-indent:0}
+  .essay .end{margin-top:110px;text-align:center;color:var(--faint);
+              letter-spacing:.5em;font-size:.85rem}
+  /* 页脚 */
+  .footer{margin-top:120px;padding-top:44px;border-top:1px solid var(--line);
+          color:var(--faint);font-size:.76rem;line-height:2}
+  .footer .q{color:var(--faint)}
+  @media (max-width:560px){
+    body{font-size:.98rem;padding:0 22px 140px}
+    .num{font-size:3.2rem}
+    .cards{gap:120px}
+    .cover h1{font-size:1.4rem}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .card{transition:none;opacity:1;transform:none}
+    html{scroll-behavior:auto}
+  }
 </style>
 </head>
 <body>
-<button class="theme-btn" onclick="toggleTheme()" title="切换日/夜" id="tb">◑</button>
-<h1>工作回顾</h1>
+<div class="bar" id="bar"></div>
+<button class="theme-btn" id="tb" onclick="toggleTheme()" title="切换日夜">◑</button>
 
-<!-- CONTENT -->
+<header class="cover">
+  <div class="eyebrow">Agenttime</div>
+  <h1>这三个月的<br>一些记录</h1>
+  <div class="range">2026.08.14 — 2026.11.05</div>
+</header>
 
-<div class="footer">
-  <p>Generated by Agenttime &middot; 数据不离开你的电脑</p>
-</div>
+<main class="cards">
+<!-- CARDS -->
+</main>
+
+<div class="turn"><span>翻到这里，剩下的不是数字了</span></div>
+
+<article class="essay">
+<!-- ESSAY -->
+</article>
+
+<footer class="footer">
+  <p class="q">数字来自本机 DeepSeek Harness 会话库，全部在本地读取。系统注入的上下文、指令与技能目录不计入。</p>
+</footer>
+
 <script>
 function toggleTheme(){
-  const h=document.documentElement,c=h.getAttribute('data-theme'),n="dark"===c?"light":"dark";
-  h.setAttribute('data-theme',n);localStorage.setItem('agenttime-theme',n);
-  document.getElementById('tb').textContent="dark"===n?"◐":"◑"
+  const h=document.documentElement,c=h.getAttribute('data-theme'),n=c==="dark"?"light":"dark";
+  h.setAttribute("data-theme",n);localStorage.setItem("agenttime-theme",n);
+  document.getElementById("tb").textContent=n==="dark"?"◐":"◑";
 }
-!function(){const t=localStorage.getItem('agenttime-theme');t&&(document.documentElement.setAttribute('data-theme',t),document.getElementById('tb').textContent="dark"===t?"◐":"◑")}();
+(function(){
+  const t=localStorage.getItem("agenttime-theme");
+  if(t){document.documentElement.setAttribute("data-theme",t);
+        document.getElementById("tb").textContent=t==="dark"?"◐":"◑";}
+})();
+(function(){
+  // 不用 IntersectionObserver：headless / 老内核里它可能不触发，
+  // 一旦不触发卡片就永远停在 opacity:0，整页变白。滚动比对矩形最稳。
+  const cards=Array.prototype.slice.call(document.querySelectorAll(".card"));
+  function reveal(){
+    const h=window.innerHeight||document.documentElement.clientHeight;
+    for(let i=0;i<cards.length;i++){
+      const c=cards[i];
+      if(c.classList.contains("in")) continue;
+      const r=c.getBoundingClientRect();
+      if(r.top<h*0.92) c.classList.add("in");
+    }
+  }
+  addEventListener("scroll",reveal,{passive:true});
+  addEventListener("resize",reveal);
+  addEventListener("load",reveal);
+  reveal();
+})();
+(function(){
+  const bar=document.getElementById("bar");
+  function tick(){
+    const h=document.documentElement;
+    const p=h.scrollTop/(h.scrollHeight-h.clientHeight||1);
+    bar.style.width=(p*100).toFixed(2)+"%";
+  }
+  addEventListener("scroll",tick,{passive:true});tick();
+})();
 </script>
 </body>
 </html>

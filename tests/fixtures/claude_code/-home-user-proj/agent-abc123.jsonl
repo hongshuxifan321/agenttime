@@ -1,0 +1,3 @@
+{"type":"summary","summary":"子代理跑的一次检查","leafUuid":"x2"}
+{"type":"user","uuid":"x1","parentUuid":null,"isSidechain":true,"agentId":"abc123","timestamp":"2026-09-02T11:00:00.000Z","message":{"role":"user","content":"这条是子代理的输入，不该算进用户自己的会话"}}
+{"type":"assistant","uuid":"x2","parentUuid":"x1","isSidechain":true,"agentId":"abc123","timestamp":"2026-09-02T11:00:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"好"}]}}

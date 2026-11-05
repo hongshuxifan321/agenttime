@@ -1,147 +1,180 @@
 ---
 name: agenttime
-description: 分析你的 AI 对话历史，生成一篇走心的个人回顾文。数据全部本地处理，写作由当前 AI 完成。触发词：对话回顾、会话回顾、个人回顾、AI 使用回顾、工作回顾、我的对话、回顾一下。用户主动调用时直接运行。
+description: 把本机 AI 对话历史整理成一份「卡片流 + 散文」的个人回顾。数据全部本地处理，不联网。触发词：对话回顾、会话回顾、个人回顾、AI 使用回顾、工作回顾、我的对话、回顾一下。用户主动调用时直接运行。
 argument-hint: "无需参数，直接运行"
 user-invocable: true
 ---
 
 # Agenttime
 
-你是 Agenttime——一个把用户的 AI 对话历史变成一篇安静个人散文的工具。
+把 `~/.dsh/sessions` 里的对话整理成一份单文件报告：先 13 张卡片摊开事实，再一篇散文写卡片讲不到的部分。默认落到桌面。
+
+**两层分离**：`engine.py` 只算数据，`render.py` 只排版，你只写中间那层文字（`narrative.json`）。不要在文案里手写数字——一律用占位符。
 
 ## 执行流程
 
-### 第一步：运行分析引擎
+### 第一步：跑数据
 
-```bash
-# 运行本 skill 目录下的 analyze.py，读 ~/.dsh/sessions 下的会话库
-python <本 SKILL.md 所在目录>/analyze.py
+中间文件放在**当前工作目录**下的 `.agenttime/`，不要用 `$env:TEMP`——沙箱会话的 TEMP 是 `Temp\dsh-xxxx`，提权进程的是 `Temp`，两边不一致，中途提权会找不到文件。
+
+```powershell
+$T = Join-Path (Get-Location) ".agenttime"
+New-Item -ItemType Directory -Force -Path $T | Out-Null
+python "$env:USERPROFILE\.dsh\skills\agenttime\cli.py" scan --out "$T\facts.json"
 ```
 
-直接输出分析结果 JSON 到 stdout。
+输出一份 `facts.json`。若报错（找不到数据源、没有时间戳），先跑 `cli.py doctor` 看这台机器上能读到什么，把结果告诉用户并停下。
 
-如果返回 error，告知用户原因并停止。
+`scan` 默认用 `doctor` 列出的第一个数据源。用户机器上有多个 agent 的历史时，问一句想用哪个，再带 `--source <名字>` 重跑。
 
-如果成功，你会得到一个包含所有统计数据的 JSON。**仔细阅读这份数据**——它包含用户和 AI 之间的协作全貌：会话次数、消息数量、时间分布、语言习惯、工具使用、思考深度、话题倾向等等。
+### 第二步：写叙事
 
-### 第二步：写一篇个人散文
+读 `facts.json`，照 `narrative.example.json` 的结构写一份 `narrative.json`（同样放在 `.agenttime/` 里）。
 
-**不要用模板。不要填空。** 你要像一个细心的助理，看着这些数据，为用户写一封独一无二的信。
+**这里是你唯一要动脑的地方**，规则见下方「写作要求」。
 
-写作要求：
+### 第三步：渲染
 
-- **口吻**：安静、沉稳、走心。像一个和你协作了很久的助理，在某个下午坐下来，为你写一封回顾信。不要热情洋溢，不要夸夸其谈，不要「你是最棒的」这种语气。
-- **语言**：简体中文。数据数字自然融入句子中，不要用括号标注，不要列表，不要图表。阿拉伯数字用半角（如「30 次」「1048 条」）。
-- **结构**：不要用标题分章节。用空行分隔段落，让文章自然流动。大致覆盖以下内容，但不要写成 checklist：
-  - 开篇：时间跨度和基本协作面貌
-  - 时间节奏：什么时候工作，深夜还是白天，连续还是间隔
-  - 沟通风格：礼貌习惯、纠正频率、中断模式，反映了什么样的人
-  - 行动方式：工具使用特征，是动手派还是讨论派
-  - 思考深度（如果有）：AI 的思考模式反映了什么
-  - 话题倾向：反复讨论的主题
-  - 收尾：一个安静的总结，不评判、不建议、不预测未来
-- **数字含义**：每个数字不只是数字——它背后是一个人的行为模式。100 次纠正说明不将就，0 次谢谢说明把 AI 当工具而非人，深夜占比高说明在安静中思考和创造。你要做的不是报数，是把数字翻译成对一个人的理解。
-- **长度**：正文 **2000 字是硬下限，2200-3200 字是健康区间**。全文约 16-22 个自然段，每段 120-160 字。不要在 1500 字就自然收尾——2000 字不是目标而是底线，写到 2200 字以上、该说的都说完了，才收笔。
-- **写长技法**（自然地写长，不是注水）：
-  - **四步段落法**：每段按「数据现象 → 行为解读 → 人格推演 → 安静余味」四步展开。先给出一个具体的数据事实，再解读它意味着什么，再推演这背后是什么样的人、什么样的习惯、什么样的标准，最后落一句安静的观察。一段就是一个完整的「看见」，全文 16-22 段就是 16-22 次看见。
-  - **特征展开**：突出的特征要写透。深夜工作占比高，就写 3-4 段：夜的场景、深夜的固定时刻、深夜在做什么、深夜与白天的差异。平淡的特征一句带过甚至不写，不要平均分配笔墨。
-  - **词语小传**：挑 2-3 个高频词（中英文皆可），各写一小段：这个词为什么反复出现，它把你带向什么样的工作习惯。词语是散文最自然的血肉，引用进句子而不是罗列出来。
-  - **场景再现**：把「最忙的一天」「最长的一次会话」「第一次会话」写成场景——那天发生了什么、那次会话谈了多久、为什么它这么长。用 `top_session_titles` / `longest_3` 里的会话标题和数字把场景立起来，而不是报一遍统计。
-  - **数据要有下文**：每个数字出现后必须跟着解读。不允许出现「你工作了 30 天」就换段——那是报数，不是写人。
-- **字数自检（硬保障，不可跳过）**：正文写完后，先不要生成 HTML。把纯文本正文（不含任何 HTML 标签）写入 `~/Desktop/agenttime_draft.txt`，运行下面的命令统计字符数：
-  ```bash
-  python -c "import pathlib; p=pathlib.Path.home()/'Desktop/agenttime_draft.txt'; print(len(p.read_text(encoding='utf-8')))"
-  ```
-  低于 2000 就回到写作，用上面的技法继续展开（补解读、扩场景、加余味），反复检查直到达标。达标后删除草稿文件，再进入第三步。
+```powershell
+python "$env:USERPROFILE\.dsh\skills\agenttime\cli.py" render "$T\facts.json" "$T\narrative.json"
+```
 
-### 第三步：生成 HTML 并保存
-
-把写好的文章嵌入 HTML 模板：
-
-1. 读取本 skill 目录下的 `template.html`
-2. 用 `<!-- CONTENT -->` 替换规则：
-   - 模板中的 `<!-- CONTENT -->` 替换为你的文章 HTML
-   - 文章体：每个段落用 `<p>...</p>` 包裹，段落间保留换行
-   - 数据数字用 `<span class="n">数字</span>` 包裹
-   - 高频词用 `<span class="w">词</span>` 包裹
-   - 中文弯引号保持原样（直引号不转换）
-3. 保存到 `~/Desktop/agenttime_report_YYYYMMDD.html`（桌面，日期取今天，如 `agenttime_report_20260809.html`）。**不要覆盖之前日期的回顾**——每次生成一份带日期的新文件，用户自己决定保留哪些
-4. **不要自动打开浏览器**。用户自己会打开。
+默认写 `~/Desktop/agenttime_report_YYYYMMDD.html`。写不进去（沙箱）时会自动回退到当前目录并打印真实路径。
 
 ### 第四步：告知用户
 
-只说一句"好了，桌面上有份文件，自己看吧"之类的轻描淡写的话。**绝对不要**：
-- 报告字数、文件大小
-- 复述文章内容
-- 提到任何技术细节（"数据提取完成""HTML 已生成"等）
-- 用任何方式暗示这是一个"产品"或"工具"
-就像一个人把一封信放在桌上，说"给你"。仅此而已。
+只说一句「桌面上有份文件，自己看吧」之类。不要报字数、不要复述内容、不要提技术细节。
 
-## 模板说明
+**例外**：如果 `render.py` 打印了回退警告（桌面不可写），要把真实路径告诉用户，并说明「桌面写不进去，文件在 XXX」。
 
-HTML 模板位置：本 skill 目录下的 `template.html`
+## narrative.json 结构
 
-模板包含：
-- 日/夜模式切换按钮（右上角）
-- CSS 变量定义（`:root` 亮色，`[data-theme="dark"]` 暗色）
-- `<h1>工作回顾</h1>` 标题
-- `<!-- CONTENT -->` 占位符（替换为你的文章）
-- 底部 footer
-- 暗色模式切换的 JavaScript
+```json
+{
+  "cards": [
+    {
+      "idx": "01",
+      "kicker": "2026 年 8 月 14 日 — 11 月 5 日",
+      "num": "{volume.sessions}",
+      "unit": "场",
+      "fact": "你和我之间，一共 <b>{volume.sessions}</b> 场对话，<b>{volume.msgs|comma}</b> 句话。",
+      "aside": "平均每句 {volume.avg_chars} 个字。不长。"
+    }
+  ],
+  "essay": [
+    "8 月 14 日下午三点五十分，你打开我，说：「{span.first_text}」。",
+    "我没有问为什么叫这个名字，你也没有说。"
+  ]
+}
+```
 
-你的文章替换 `<!-- CONTENT -->`。不要改动模板的其他部分。
+三种卡片：
 
-## 数据 JSON 字段说明
+| 类型 | 必备字段 | 说明 |
+|---|---|---|
+| 数字卡 | `num` + `unit` | 大字 + 单位 |
+| 列表卡 | `list_from` | 从 facts 取列表，目前只有 `"projects"` |
+| 词云卡 | `chips_from` | 从 facts 取 `[[词, 次数], ...]`，取前 10 |
 
-分析引擎输出的主要字段（按需取用，不是每个都要写进文章）：
+每张卡都必须有 `idx`、`kicker`；`fact` 和 `aside` 至少有一个。
 
-| 字段 | 说明 |
-|------|------|
-| total_sessions | 会话总数 |
-| total_user_msgs | 用户消息总数 |
-| total_assistant_msgs | AI 回复总数 |
-| total_thinking | 思考块总数 |
-| total_tools | 工具调用总数 |
-| total_chars | 用户输入总字符数 |
-| avg_msg_chars | 平均每条消息字符数 |
-| avg_msgs_per_session | 平均每会话消息数 |
-| max_len / min_len / median_len | 会话长度分布 |
-| total_days | 跨越总天数 |
-| unique_dates | 活跃天数 |
-| active_day_ratio | 活跃度百分比 |
-| first_date / last_date | 起止日期 |
-| busiest_day / busiest_day_msgs | 最密集日 |
-| total_files_touched | 触碰文件数 |
-| hour_dist | 24 小时分布（本地时区） |
-| peak_hour / peak_count | 高峰时段（本地时区） |
-| morning_pct / afternoon_pct / evening_pct / late_night_pct | 四时段占比（本地时区） |
-| max_streak | 最长连续天数 |
-| avg_gap | 平均间隔天数 |
-| busiest_weekday | 最活跃星期（中文，如「周三」） |
-| cn_ratio | 中文字符占比 |
-| top_words | 英文高频词 Top 40 |
-| top_cn | 中文高频二字词 Top 30（已滤虚词） |
-| thank_n / sorry_n / please_n / interrupt_n / confirm_n | 行为关键词计数 |
-| fw_avg / rw_avg | 早期/近期平均消息长度 |
-| length_trend | 消息长度趋势 |
-| tool_breakdown | 工具使用排行 |
-| top_tool / top_tool_count | 最常用工具 |
-| tool_per_msg | 每条消息工具调用数 |
-| thinking_per_msg | 每条消息思考数 |
-| avg_think / max_think / min_think | 思考深度 |
-| think_depth_dist | 思考深度分布 |
-| deep_hours | 深度思考时段 |
-| recurring_topics | 会话标题高频词 |
-| longest_3 | 消息最多的 3 个会话（id、**标题**、消息数）——写「最长那次会话」的场景时用 |
-| most_tool_3 | 工具调用最多的 3 个会话（id、**标题**、调用数） |
-| top_session_titles | 消息最多的 8 个会话（id、标题、消息数）——写话题倾向时引具体会话 |
-| sources | 数据来源统计 |
-| source_label | 数据来源标签 |
+## 占位符
+
+文案里写 `{路径}`，渲染时从 `facts.json` 取值替换。支持三个过滤器：
+
+- `{path|comma}` → 千分位：`16,183`
+- `{path|round}` → 取整：`220`
+- `{path|cnwan}` → 中文万数：`十一万`、`两千四百八十一万`
+
+**不要手写数字**。能取就取，取不到再自己写。
+
+## 可用路径
+
+```
+span.first            第一次对话，2026-08-14 15:50
+span.first_time       15:50
+span.first_text       第一句话原文
+span.total_days       84
+span.last             最后一次对话时间
+
+volume.sessions       89        会话数
+volume.msgs           1,355     真人消息数
+volume.chars          112,869   真人输入总字符
+volume.avg_chars      83.5      平均每句字数
+
+rhythm.active_days    42        来过的天数
+rhythm.max_streak     16        最长连续
+rhythm.sittings       76        一次坐下的次数（间隔 90 分钟切分）
+rhythm.avg_per_sitting 17.8     每次平均句数
+rhythm.busiest_day    2026-08-16
+rhythm.busiest_n      139       最密那天的句数
+rhythm.busiest_titles [[标题, 句数], ...]   最密那天的会话
+rhythm.peak_hour      10
+rhythm.peak_count     151
+rhythm.hour_dist      24 小时分布 {0..23: 次数}
+rhythm.late_msgs      29        凌晨 0-5 点的消息数
+rhythm.late_sessions  10
+rhythm.latest         10 月 10 日 01:45
+
+words.shortest        {len, text}    最短的一句
+words.longest         {len, text}    最长的一句
+words.thanks          0              「谢谢」出现次数
+words.confirms        24
+words.interrupts      38             打断词出现次数
+words.en              [[英文词, 次数], ...]
+words.cn              [[中文词, 次数], ...]
+
+agent.tools_total     16,183
+agent.tools_top       [[工具名, 次数], ...]
+agent.tools_by_name   按名字取，如 agent.tools_by_name.pwsh
+agent.reasoning_chars 24,819,142     思考总字符
+agent.ratio           220            用户每 1 字对应多少思考字
+agent.read_days       29             按每秒 10 字读完全部思考要几天
+agent.approvals_asked 2,534
+agent.approvals_granted 2,523
+agent.denied          11
+
+projects              [{title, n, start, end, tools}, ...]  最多 10 条
+deepest_project       {title, n, start, end, tools}         工具调用最多的那条
+quality               {dirs, ok, skipped_no_user, read_error, filtered_injected}
+```
+
+## 写作要求
+
+### 卡片
+
+- **每张卡只说一件事**。`kicker` 是一行小字（日期或语境），`fact` 是一句完整的话，`aside` 是余味
+- **数字有分量**：`num` 是这张卡的主角，不要塞两个数字
+- **13 张左右**。数据里没有的东西不要硬凑——没有凌晨活动就不做「深夜」卡，没有打断就不做「算了」卡。最少 8 张，最多 16 张
+- `fact` 里可以用 `<b>...</b>` 强调关键数字
+
+### 散文
+
+- **40 段上下，1400-1600 字**。段落短，一句到两句一段，像说话，不像写文章
+- **不要复述卡片里的数字**。卡片已经报过一遍，散文写卡片讲不到的：空白的日子、没说出口的部分、看不见的那一半
+- **不要评价这个人**。写「那天你说了 139 句」，不写「你是个专注的人」。人格留给读者自己拼
+- **可以有「我」**。整篇是 AI 的第一人称，这是这个 skill 和其他年度报告的区别
+- 中文数字用 `|cnwan` 过滤器，阿拉伯数字直接写
+
+### 语气
+
+安静、克制、不煽情。像某个下午坐下来，把一本账翻完。
+
+不要「你是最棒的」，不要「让我们一起」，不要「这一年你收获了」。
+
+## 数据口径
+
+- 只统计 `user/message` 且 `data.source.kind == "user"` 的消息。DSH 会把运行时上下文、`AGENTS.md`、技能目录都写成 `user/message`，这些必须剔除，否则词频全是系统文本
+- 时间戳只取真人消息，不混入 tool/call、session/title
+- 「思考量」是 reasoning 块的文本长度，不是块数
+- 「一次坐下」按消息间隔 90 分钟切分，不用会话首末时间（会话可以隔几天恢复）
+- 读不出来的会话记在 `quality` 里，不静默跳过
+
+如果 `quality.filtered_injected` 是 0，说明这批数据没有注入，或者 DSH 改了格式——要在报告里说明。
 
 ## 注意事项
 
-- 数据中的 `%` 是百分号，HTML 中不需要特殊处理
-- 文章中不要出现任何 markdown 标记（如 `**`、`#`）
-- 数字使用半角阿拉伯数字（如「30 次」而非「三十次」）
-- 一定不要改 analyze.py——分析逻辑和写作逻辑是完全分离的
-- 所有时间统计已转换为本地时区，直接使用即可
+- 不要改 `engine.py` 和 `render.py`。分析和渲染是固定层，只有 `narrative.json` 是每次现写的
+- 文章里不要出现 Markdown 标记
+- 生成后不要自动打开浏览器
+- 每次生成新文件，不覆盖之前的日期

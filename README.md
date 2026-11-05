@@ -1,38 +1,86 @@
 # Agenttime
 
-DeepSeek Harness Skill —— 把你的 AI 对话历史变成一篇安静的个人散文。
+把本机的 AI 对话历史整理成一份**卡片流 + 散文**的个人回顾。数据全部本地处理，不联网、不上传。
 
 ## 这是什么
 
-Agenttime 分析你和 AI 助手之间的所有对话记录，然后写一篇文章——关于你是怎样的人、在什么时间工作、如何与 AI 沟通、你的习惯和标准。
+先 13 张卡片把三个月的事实摊开——第一句话是什么时候、一共坐下多少次、最密的一天说了多少句、你输入多少字而它想了多少字——最后用一篇散文写卡片讲不到的部分。
 
-它不是效率报告。不是仪表盘。没有排行榜。就是一封信。
+不是效率报告，不是仪表盘。是一份可以翻的东西。
 
 ## 安装
 
-把本目录放进 `~/.dsh/skills/`（目录名即 skill 名，此处为 `agenttime`）。
+把这个目录放进 `~/.dsh/skills/agenttime`（目录名即 skill 名）。
+
+依赖：`zstandard`（读 DSH 会话日志用）。
+
+```powershell
+pip install zstandard
+```
 
 ## 使用
 
-在 DeepSeek Harness 里输入 `/agenttime`，或直接说「回顾一下」。然后等一会儿。桌面上会出现一份 HTML 文件，打开看。
-
-## 数据源
-
-- DeepSeek Harness 会话库（`~/.dsh/sessions` 下的 `session[.vN].jsonl.zstd`）
-- ChatGPT 导出（把 `conversations.json` 放在桌面或下载文件夹，自动检测）
-
-**依赖**：除标准库外，读 DSH 会话需要 `zstandard`（`pip install zstandard`）。ChatGPT 导出不依赖它。
-
-## 隐私
-
-所有分析在你本地完成。数据从不离开你的电脑。
+在 DeepSeek Harness 里输入 `/agenttime`，或说「回顾一下」。一会儿桌面上会多出一份 HTML。
 
 ## 文件结构
 
+| 文件 | 作用 |
+|---|---|
+| `SKILL.md` | skill 定义，AI 读这个 |
+| `cli.py` | 命令行入口：doctor / scan / render |
+| `engine.py` | 统计层，吃统一会话结构，产出 `facts.json` |
+| `adapters/` | 各 agent 的日志解析，每个 agent 一个文件 |
+| `render.py` | 读 `facts.json` + `narrative.json` + 模板，输出单文件 HTML |
+| `template.html` | 版式：封面 / 卡片流 / 转场 / 散文 / 页脚 |
+| `narrative.example.json` | 叙事示例，AI 照着写每次的 `narrative.json` |
+
+## 手动跑
+
+```powershell
+python cli.py doctor                 # 看看能读到哪些会话
+python cli.py scan --out facts.json  # 统计
+# 写 narrative.json（照 narrative.example.json 的结构）
+python cli.py render facts.json narrative.json
 ```
-agenttime/
-├── SKILL.md       # Skill 定义（Agent 读取这个）
-├── analyze.py     # 本地分析引擎（支持 CLI：python analyze.py）
-├── template.html  # HTML 模板
-└── README.md
+
+默认输出 `~/Desktop/agenttime_report_YYYYMMDD.html`，桌面不可写时回退到当前目录并打印真实路径。
+
+中间文件建议放当前目录的 `.agenttime/`，不用 `$env:TEMP`——沙箱会话的 TEMP 和提权进程的不是同一个目录（前者带 `dsh-xxxx` 后缀），中途提权会找不到文件。
+
+## 支持的 agent
+
+| agent | 日志位置 | 状态 |
+|---|---|---|
+| DeepSeek Harness | `~/.dsh/sessions` | 支持，真机验证 |
+| Claude Code | `~/.claude/projects` | 支持，fixture 验证（尚未在真机数据上跑过） |
+
+Claude Code 的 adapter 是按[公开的会话格式文档](https://github.com/neilberkman/ccrider/blob/v1.1.8/research/schema.md)写的，用 `tests/fixtures/` 里手工构造的会话回归测试。如果你有 Claude Code 的真实会话，跑一次 `python cli.py doctor` 就能确认读不读得到；读到了但数字明显不对，把结构和现象记下来提 issue。
+
+加一个新 agent = 在 `adapters/` 下写一个文件，实现 `detect()` 和 `load()`，然后在 `adapters/__init__.py` 的 `REGISTRY` 里加一行。统计和渲染都不用动。
+
+## 测试
+
+```powershell
+python tests/test_claude_code.py
 ```
+
+本机没有 Claude Code，测试用 fixtures 里按官方 schema 构造的会话，覆盖：summary 标题、tool_result、isMeta、system-reminder、command 标签、子代理 agent-*.jsonl。改 adapter 后先跑这个。
+
+默认输出 `~/Desktop/agenttime_report_YYYYMMDD.html`，桌面不可写时回退到当前目录并打印真实路径。
+
+## 数据口径
+
+只在本地读 `~/.dsh/sessions`。
+
+DSH 会把运行时上下文、`AGENTS.md`、技能目录都写成 `user/message` 事件。这些不是用户说的话，必须按 `data.source.kind == "user"` 过滤掉——实测本机 2,608 条 `user/message` 里只有 1,360 条是真人输入，注入文本是真实输入的 92 倍。
+
+其余口径：
+
+- 时间戳只取真人消息，不混入工具调用和会话标题事件
+- 「思考量」取 reasoning 块的文本长度，不是块数
+- 「一次坐下」按消息间隔 90 分钟切分，不用会话首末时间
+- 读不出来 / 没有真人消息的会话记在 `quality` 里，不静默跳过
+
+## 隐私
+
+所有分析在本机完成。报告是一份 HTML，写到哪里由你决定；给别人看之前自己过一眼。
