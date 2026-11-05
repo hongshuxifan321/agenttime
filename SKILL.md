@@ -120,7 +120,7 @@ python "$SKILL\cli.py" render "$T\facts.json" "$T\narrative.json"
 
 ### 有些值是空的
 
-数据里没有的东西，`facts.json` 里就是 `null` 或空列表——`rhythm.latest`（没有凌晨消息时）、`deepest_project`（没有工具调用时）、`words.longest` 之类。它们渲染出来是空字符串，句子会断成「最晚的一次，是 。」
+数据里没有的东西，`facts.json` 里就是 `null` 或空列表——`rhythm.latest`（没有凌晨消息时）、`agent.tools_top`（数据源没记工具调用时，整个列表是空的，`{agent.tools_top.0.0}` 也就取不到）、`deepest_project`（同样）、`words.longest` 之类。它们渲染出来是空字符串，句子会断成「最晚的一次，是 。」
 
 写之前先在 `facts.json` 里看一眼。为空就不要写那句话，也不要用那个占位符。`render.py` 会在最后打一行 `[warn] 这些占位符在 facts.json 里找不到`，看到它就是要改。
 

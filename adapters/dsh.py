@@ -96,6 +96,14 @@ def _tidy(text: str) -> str:
 
 
 def load(root: str = ROOT) -> tuple[list[Session], LoadReport]:
+    # 先确认依赖在不在。不这么写的话，缺 zstandard 会变成「每个文件都读不出来」，
+    # 用户看到的是一句「96 个读取失败」，完全看不出是 pip install 没做。
+    try:
+        import zstandard  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            "读 DSH 会话需要 zstandard：pip install zstandard") from exc
+
     report = LoadReport(source="dsh", root=root)
     sessions: list[Session] = []
 
@@ -108,8 +116,11 @@ def load(root: str = ROOT) -> tuple[list[Session], LoadReport]:
             continue
         try:
             events = _read_events(log)
-        except Exception:
+        except Exception as exc:
             report.read_errors += 1
+            msg = str(exc) or exc.__class__.__name__
+            if msg not in report.errors and len(report.errors) < 3:
+                report.errors.append(msg)
             continue
         if not events:
             report.read_errors += 1

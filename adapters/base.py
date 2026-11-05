@@ -82,6 +82,7 @@ class LoadReport:
     skipped_no_user: int = 0      # 有内容但没有真人消息
     read_errors: int = 0          # 读不出来 / 格式不认识
     filtered_injected: int = 0    # 被挡掉的系统注入条数
+    errors: list = field(default_factory=list)  # 失败原因，去重后留几条
 
     def as_dict(self) -> dict:
         return {
@@ -90,4 +91,5 @@ class LoadReport:
             "skipped_no_user": self.skipped_no_user,
             "read_error": self.read_errors,
             "filtered_injected": self.filtered_injected,
+            "error_hint": self.errors[0] if self.errors else "",
         }

@@ -84,6 +84,9 @@ def _merge_reports(reports) -> LoadReport:
         m.skipped_no_user += r.skipped_no_user
         m.read_errors += r.read_errors
         m.filtered_injected += r.filtered_injected
+        for e in r.errors:
+            if e not in m.errors and len(m.errors) < 3:
+                m.errors.append(e)
     return m
 
 
@@ -106,6 +109,7 @@ def cmd_doctor(_args) -> int:
         return 1
 
     print(f"找到 {len(found)} 个数据源：\n")
+    usable = 0
     for name, root in found:
         try:
             sessions, report = load(name, root)
@@ -113,6 +117,7 @@ def cmd_doctor(_args) -> int:
             print(f"  {name}  {root}")
             print(f"    读取失败：{exc}\n")
             continue
+        usable += 1
         msgs = sum(len(s.msgs) for s in sessions)
         print(f"  {name}  {root}")
         print(f"    {report.ok} 个会话 · {_fmt(msgs)} 条真人消息")
@@ -122,7 +127,13 @@ def cmd_doctor(_args) -> int:
             print(f"    跳过没有真人消息的会话 {report.skipped_no_user} 个")
         if report.read_errors:
             print(f"    读不出来 {report.read_errors} 个")
+            for e in report.errors:
+                print(f"      {e}")
         print()
+
+    if usable == 0:
+        print("这些数据源一个都没读成功，先解决上面的问题。\n")
+        return 1
 
     if len(found) == 1:
         print(f"默认使用 {found[0][0]}。运行 scan 开始统计。\n")
@@ -161,10 +172,14 @@ def cmd_scan(args) -> int:
         reports.append(r)
 
     if not sessions:
+        if not reports:
+            return 1        # 全是异常，原因已经逐条打过了
         print(f"这些数据源一条会话都没读出来：" + "、".join(n for n, _ in targets))
         for r in reports:
             print(f"  {r.source}：{r.root}，扫到 {r.dirs} 个会话目录，"
                   f"{r.read_errors} 个读取失败")
+            for e in r.errors:
+                print(f"    原因：{e}")
         return 1
 
     report = _merge_reports(reports) if len(reports) > 1 else reports[0]
