@@ -82,11 +82,31 @@ def _is_real_user(data: dict) -> bool:
     return src.get("kind") == "user"
 
 
-def _local(ts_ms):
-    if not isinstance(ts_ms, (int, float)):
+def _local(ts):
+    """DSH 现在写毫秒时间戳。
+
+    数字字符串和 ISO 也一并认——它哪天改了时间字段的格式，如果这里只认数字，
+    结果会是每条消息都没有时间戳、`build_facts` 直接报「没有带时间戳的
+    用户消息」，而用户完全看不出是格式变了。
+    """
+    if isinstance(ts, bool):
+        return None
+    if isinstance(ts, str):
+        s = ts.strip()
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone()
+        except ValueError:
+            pass
+        try:
+            ts = float(s)
+        except ValueError:
+            return None
+    if not isinstance(ts, (int, float)):
         return None
     try:
-        return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).astimezone()
+        return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).astimezone()
     except (ValueError, OSError, OverflowError):
         return None
 

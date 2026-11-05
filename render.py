@@ -44,13 +44,20 @@ def get_path(data, path):
 _CN_D = "零一二三四五六七八九"
 
 
-def cn_num(n: int) -> str:
-    """整数转中文，散文中「十一万」「两千四百八十一万」这类读感用。"""
+def cn_num(n: int, standalone: bool = True) -> str:
+    """整数转中文，散文中「十一万」「两千四百八十一万」这类读感用。
+
+    `standalone=False` 用于百/千后面的位置：那里 10 要写「一十」
+    （一百一十），单独说的时候才是「十」。万位和亿位的乘数用
+    standalone=True —— 110000 是「十一万」，不是「一十一万」。
+    """
     n = int(n)
+    if n < 0:
+        return "负" + cn_num(-n, standalone)
     if n < 10:
         return _CN_D[n]
     if n < 20:
-        return "十" + (_CN_D[n % 10] if n % 10 else "")
+        return ("十" if standalone else "一十") + (_CN_D[n % 10] if n % 10 else "")
     if n < 100:
         return _CN_D[n // 10] + "十" + (_CN_D[n % 10] if n % 10 else "")
     if n < 1000:
@@ -58,27 +65,33 @@ def cn_num(n: int) -> str:
         r = n % 100
         if r == 0:
             return s
-        return s + ("零" + _CN_D[r] if r < 10 else cn_num(r))
+        return s + ("零" + cn_num(r, False) if r < 10 else cn_num(r, False))
     if n < 10000:
         s = ("两千" if n // 1000 == 2 else _CN_D[n // 1000] + "千")
         r = n % 1000
         if r == 0:
             return s
-        return s + ("零" + cn_num(r) if r < 100 else cn_num(r))
-    s = cn_num(n // 10000) + "万"
-    r = n % 10000
+        return s + ("零" + cn_num(r, False) if r < 100 else cn_num(r, False))
+    if n < 100000000:
+        s = cn_num(n // 10000) + "万"
+        r = n % 10000
+        if r == 0:
+            return s
+        return s + ("零" + cn_num(r, False) if r < 1000 else cn_num(r, False))
+    # 超过一亿：思考量大的用户会走到这里
+    s = cn_num(n // 100000000) + "亿"
+    r = n % 100000000
     if r == 0:
         return s
-    return s + ("零" + cn_num(r) if r < 1000 else cn_num(r))
+    return s + ("零" + cn_num(r, False) if r < 10000000 else cn_num(r, False))
 
 
 def _fmt(val, filters):
     if isinstance(val, bool) or val is None:
         s = "" if val is None else str(val).lower()
     elif isinstance(val, int):
-        if "cnwan" in filters:
-            s = cn_num(val // 10000) + "万" if val >= 10000 else cn_num(val)
-        elif "cn" in filters:
+        if "cnwan" in filters or "cn" in filters:
+            # 交给 cn_num 自己分段：它认得亿，外层再 //10000 会把亿说成万
             s = cn_num(val)
         elif "comma" in filters:
             s = f"{val:,}"
@@ -269,8 +282,15 @@ def main(argv: list[str]) -> int:
     with open(tpl_path, encoding="utf-8") as fh:
         tpl = fh.read()
 
-    cards = "\n\n".join(card_html(c, facts) for c in narrative["cards"])
-    essay = "\n".join(f"<p>{subst(p, facts)}</p>" for p in narrative["essay"])
+    if "cards" not in narrative and "essay" not in narrative:
+        print("narrative.json 结构不对：既没有 cards 也没有 essay。")
+        print("照 narrative.example.json 的样子写，至少要有其中一个。")
+        return 1
+
+    cards_src = narrative.get("cards") or []
+    essay_src = narrative.get("essay") or []
+    cards = "\n\n".join(card_html(c, facts) for c in cards_src)
+    essay = "\n".join(f"<p>{subst(p, facts)}</p>" for p in essay_src)
 
     # 模板里那几句固定文案（标题、转场、页脚）默认是中文。报告的语种要跟数据一致，
     # 英文数据就由 narrative.chrome 覆盖掉；不写 chrome 就保持中文默认。
@@ -303,7 +323,7 @@ def main(argv: list[str]) -> int:
     # 用户明确指定 --out 时可以覆盖；用默认文件名时一份都不覆盖
     final = write_out(page, out_path or default_out(),
                       allow_overwrite=bool(out_path))
-    print(f"写入 {final}（{len(page):,} 字节，{len(narrative['cards'])} 张卡）")
+    print(f"写入 {final}（{len(page):,} 字节，{len(cards_src)} 张卡）")
     return 0
 
 

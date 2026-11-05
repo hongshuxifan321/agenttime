@@ -183,7 +183,13 @@ def cmd_scan(args) -> int:
         return 1
 
     report = _merge_reports(reports) if len(reports) > 1 else reports[0]
-    facts = engine.build_facts(sessions, report)
+    try:
+        facts = engine.build_facts(sessions, report)
+    except ValueError as exc:
+        print(f"统计没做成：{exc}")
+        print("会话是读到了一些，但里面没有一条带时间戳的真人消息。")
+        print("多半是 agent 那边改了时间字段的格式，跑 `python cli.py doctor` 看看。")
+        return 1
     out = args.out or "facts.json"
     parent = os.path.dirname(os.path.abspath(out))
     os.makedirs(parent, exist_ok=True)
