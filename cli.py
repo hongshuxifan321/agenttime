@@ -23,6 +23,31 @@ def _fmt(n: int) -> str:
     return f"{n:,}"
 
 
+def _top_dir(path: str) -> str:
+    """把数据源路径折算到主目录下的第一层目录，用来排除已适配的源。"""
+    home = os.path.expanduser("~")
+    rel = os.path.relpath(path, home)
+    return os.path.join(home, rel.split(os.sep)[0])
+
+
+def _report_unknown(known_roots=()) -> None:
+    """扫一遍主目录，把没有 adapter 的会话存储列出来。"""
+    from adapters import discover
+    try:
+        unknown = discover.scan(exclude=[_top_dir(r) for r in known_roots])
+    except Exception:
+        return
+    if not unknown:
+        return
+    print("还有一些地方像对话数据，但还没有 adapter：\n")
+    for u in unknown:
+        sample = u["sample"][0] if u["sample"] else ""
+        print(f"  {u['path']}")
+        print(f"    发现 {u['count']} 个候选文件，例如 {sample}")
+    print()
+    print("想支持的话，在 adapters/ 下加一个文件，实现 detect() 和 load()，见 README。\n")
+
+
 def cmd_doctor(_args) -> int:
     found = available()
     if not found:
@@ -30,8 +55,11 @@ def cmd_doctor(_args) -> int:
         print()
         print("agenttime 现在支持：")
         print("  DeepSeek Harness   ~/.dsh/sessions")
+        print("  Claude Code        ~/.claude/projects")
+        print("  ZCode              ~/.zcode/cli/db/db.sqlite")
+        print("  Codex              ~/.codex/sessions")
         print()
-        print("如果你的 agent 不在列表里，说明它的日志格式还没适配。")
+        _report_unknown([r for _, r in found])
         return 1
 
     print(f"找到 {len(found)} 个数据源：\n")
@@ -53,7 +81,8 @@ def cmd_doctor(_args) -> int:
             print(f"    读不出来 {report.read_errors} 个")
         print()
 
-    print(f"默认使用 {found[0][0]}。运行 scan 开始统计。")
+    print(f"默认使用 {found[0][0]}。运行 scan 开始统计。\n")
+    _report_unknown([r for _, r in found])
     return 0
 
 

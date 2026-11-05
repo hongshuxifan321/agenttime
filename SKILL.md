@@ -174,6 +174,7 @@ quality               {dirs, ok, skipped_no_user, read_error, filtered_injected}
 | dsh | ✓ | ✓ | ✓ | ✓ |
 | claude_code | ✓ | ✓ | ✓ | ✗ |
 | zcode | ✓ | ✓ | ✓ | ✗ |
+| raixis | ✓ | ✗ | ✗ | ✗ |
 | codex | 常为空 | ✗ | ✗ | ✗ |
 
 - Codex 的本地日志里 `UserMessage` 经常被系统提示占满（实测一台机器 74 个会话全是注入），读不出真人输入时 doctor 会报 0 个会话。这时直接告诉用户「Codex 的本地日志里没有可读的对话」，不要换源硬凑

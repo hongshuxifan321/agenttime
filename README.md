@@ -54,7 +54,10 @@ python cli.py render facts.json narrative.json
 | DeepSeek Harness | `~/.dsh/sessions` | 真机验证 |
 | Claude Code | `~/.claude/projects` | fixture 验证（本机无真机数据） |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | 真机验证 |
+| 锐识 AI (raixis) | `~/.raixis/sessions` | 真机验证 |
 | Codex | `~/.codex/sessions` | 能读文件，但**读不到真人输入**（见下） |
+
+`doctor` 除了探测上面这几个，还会扫一遍你的主目录，把「看起来像对话数据、但还没有 adapter」的地方列出来。装了别的 agent 时能看到它还缺什么，而不是一片空白。
 
 各源能提供的数据不一样，缺的就少做几张卡：
 
@@ -63,6 +66,7 @@ python cli.py render facts.json narrative.json
 | DSH | ✓ | ✓ | ✓ | ✓ |
 | Claude Code | ✓ | ✓ | ✓ | ✗ |
 | ZCode | ✓ | ✓ | ✓ | ✗ |
+| raixis | ✓ | ✗ | ✗ | ✗ |
 | Codex | 常为空 | ✗ | ✗ | ✗ |
 
 **关于 Codex**：它的 rollout 日志里，`response_item` 的 `role=user` 是发给模型的完整请求（混着 30K 字符的系统提示），而 `event_msg` 的 `UserMessage` 实测也全是系统提示。sqlite 里只有线程目录、没有消息内容。所以 adapter 保留着，但通常读不出东西——这比拿系统提示凑一份报告诚实。
