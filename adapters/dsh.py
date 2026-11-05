@@ -7,6 +7,8 @@ DSH 把运行时上下文、AGENTS.md、技能目录都写成 `user/message` 事
 靠 `data.source.kind` 区分：只有 `user` 才是真人说的话，其余必须挡掉。
 """
 
+from __future__ import annotations
+
 import glob
 import io
 import json
@@ -157,7 +159,7 @@ def load(root: str = ROOT) -> tuple[list[Session], LoadReport]:
             report.skipped_no_user += 1
             continue
 
-        msgs.sort(key=lambda m: m.dt or datetime.min.astimezone())
+        msgs.sort(key=lambda m: m.ts)
         sessions.append(Session(
             id=os.path.basename(session_dir),
             title=title or "无标题",

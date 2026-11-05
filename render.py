@@ -8,6 +8,8 @@
     python render.py --out D:\\x.html      # 指定输出
 """
 
+from __future__ import annotations
+
 import html
 import json
 import os
@@ -196,10 +198,15 @@ def _source_line(facts) -> str:
 
 
 def default_out() -> str:
-    """文件名带时分秒，同一天跑几次、几个 agent 各出一份都分得开。"""
+    """文件名带时分秒，同一天跑几次、几个 agent 各出一份都分得开。
+
+    桌面不存在时（Linux 上很常见）直接落在当前目录，不走「写失败再回退」
+    那条路——否则用户会看到一条其实不算错误的 warn。
+    """
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(os.path.expanduser("~"), "Desktop",
-                        f"agenttime_report_{stamp}.html")
+    name = f"agenttime_report_{stamp}.html"
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    return os.path.join(desktop if os.path.isdir(desktop) else os.getcwd(), name)
 
 
 def _unique(path: str) -> str:
@@ -268,6 +275,7 @@ def main(argv: list[str]) -> int:
     # 模板里那几句固定文案（标题、转场、页脚）默认是中文。报告的语种要跟数据一致，
     # 英文数据就由 narrative.chrome 覆盖掉；不写 chrome 就保持中文默认。
     chrome = narrative.get("chrome") or {}
+    lang = chrome.get("lang") or "zh-CN"
     headline = chrome.get("headline") or _headline(facts)
     title = chrome.get("title") or headline.replace("<br>", " ")
     turn = chrome.get("turn") or "翻到这里，剩下的不是数字了"
@@ -275,7 +283,8 @@ def main(argv: list[str]) -> int:
         f"数据来自 {_source_line(facts)}，全部在本地读取。"
         "系统注入的上下文、指令与技能目录不计入。")
 
-    page = (tpl.replace("<!-- TITLE -->", title)
+    page = (tpl.replace("<!-- LANG -->", lang)
+               .replace("<!-- TITLE -->", title)
                .replace("<!-- HEADLINE -->", headline)
                .replace("<!-- RANGE -->", _daterange(facts))
                .replace("<!-- TURN -->", turn)

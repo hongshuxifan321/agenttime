@@ -4,9 +4,11 @@
 不需要碰统计和渲染。
 """
 
+from __future__ import annotations
+
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -23,9 +25,39 @@ class Message:
     full_len: int = 0             # 截断前的原文字符数
     truncated: bool = False       # 原文超过上限被截断过
 
+    def __post_init__(self):
+        # 统一成带时区的 datetime。adapter 可能给 naive 的，一旦和 aware 的
+        # 混在同一份数据里，排序、做差、比较处处都会抛
+        # 「can't compare offset-naive and offset-aware datetimes」。
+        # 在这里一次性归一，下游就不用各自兜底。
+        dt = self.dt
+        if dt is not None and dt.tzinfo is None:
+            try:
+                self.dt = dt.astimezone()
+            except (OSError, OverflowError, ValueError):
+                # 极早的时间在正时区下 astimezone 会下溢，退回 UTC
+                self.dt = dt.replace(tzinfo=timezone.utc)
+
     @property
     def len(self) -> int:
         return self.full_len or len(self.text)
+
+    @property
+    def ts(self) -> float:
+        """排序用的时间戳。没有时间戳的排最前。
+
+        不要用 `datetime.min.astimezone()` 当哨兵：naive 的 datetime.min
+        按本地时区转 UTC 时，东区会下溢——实测东八区直接抛
+        `OSError [Errno 22]`，而且只有「恰好有一条消息缺时间戳」才会
+        触发，平时完全看不出来。走 timestamp() 还顺手兼容 naive 与
+        aware 混在一起的情况。
+        """
+        if self.dt is None:
+            return 0.0
+        try:
+            return self.dt.timestamp()
+        except (ValueError, OSError, OverflowError):
+            return 0.0
 
 
 @dataclass

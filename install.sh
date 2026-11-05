@@ -45,14 +45,17 @@ skills_dirs() {
         return
     fi
 
-    local candidates=(
+    # 先声明再赋值：macOS 自带 bash 3.2 对 `local arr=(...)` 的解析不稳
+    local candidates
+    candidates=(
         "$HOME/.dsh/skills"            # DeepSeek Harness
         "$HOME/.claude/skills"         # Claude Code
         "$HOME/.codex/skills"          # Codex
         "$HOME/.config/agents/skills"
     )
 
-    local found=()
+    local found
+    found=()
     local c
     for c in "${candidates[@]}"; do
         if [[ -d "$c" ]]; then
@@ -62,7 +65,8 @@ skills_dirs() {
 
     if [[ ${#found[@]} -eq 0 ]]; then
         # Parent exists but skills/ does not.
-        local parents=(".dsh" ".claude" ".codex")
+        local parents
+        parents=(".dsh" ".claude" ".codex")
         local p
         for p in "${parents[@]}"; do
             if [[ -d "$HOME/$p" ]]; then

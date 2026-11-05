@@ -4,6 +4,8 @@
 这个文件不用改。
 """
 
+from __future__ import annotations
+
 import re
 from collections import Counter
 from datetime import datetime
@@ -77,7 +79,7 @@ def _word_stats(msgs: list) -> tuple[list, list]:
 def build_facts(sessions: list[Session], report: LoadReport | None = None) -> dict:
     report = report or LoadReport()
     all_msgs = [m for s in sessions for m in s.msgs]
-    all_msgs.sort(key=lambda m: m.dt or datetime.min.astimezone())
+    all_msgs.sort(key=lambda m: m.ts)
     dated = [m for m in all_msgs if m.dt]
     if not dated:
         raise ValueError("没有带时间戳的用户消息")

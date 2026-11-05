@@ -8,6 +8,8 @@
 判断偏保守：宁可漏报，也不要把 Stata 的 audit 日志当成对话数据。
 """
 
+from __future__ import annotations
+
 import os
 
 HOME = os.path.expanduser("~")

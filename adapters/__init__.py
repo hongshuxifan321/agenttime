@@ -10,6 +10,8 @@
 统计和渲染都不用动。
 """
 
+from __future__ import annotations
+
 from . import dsh
 
 # (名字, 探测函数, 读取函数)

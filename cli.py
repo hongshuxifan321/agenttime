@@ -7,6 +7,8 @@
 也可以不带子命令直接跑 `python cli.py`，等价于 doctor。
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

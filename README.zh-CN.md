@@ -184,7 +184,7 @@ def load(root: str) -> tuple[list[Session], LoadReport]:
 
 ## 环境
 
-- Python 3.10+（用了 `str | None` 语法）
+- Python 3.9+（源码里带 `from __future__ import annotations`，3.9 也能跑）
 - `zstandard`，只有读 DSH 时用
 - Windows / macOS / Linux，路径统一用 `~` 展开
 

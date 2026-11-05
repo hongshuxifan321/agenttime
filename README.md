@@ -184,7 +184,7 @@ The hard part is always the injection filter in `load()`. DSH has a clean field,
 
 ## Requirements
 
-- Python 3.10+ (uses `str | None` syntax)
+- Python 3.9+ (the source carries `from __future__ import annotations`, so 3.9 works)
 - `zstandard`, only for DSH logs
 - Windows / macOS / Linux, paths expanded from `~`
 
