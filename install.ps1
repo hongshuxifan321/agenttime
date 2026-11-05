@@ -91,6 +91,12 @@ function Install-Skill {
 
     if (Test-Path $dest) {
         if (-not $Force) {
+            # 输入被重定向（CI、管道）时 Read-Host 会抛，按「不覆盖」处理
+            if ([Console]::IsInputRedirected) {
+                Write-Host '   already exists and input is redirected; skipping.'
+                Write-Host '   re-run with -Force to overwrite.'
+                return $false
+            }
             $answer = Read-Host "   already exists. overwrite? [y/N]"
             if ($answer -notmatch '^[Yy]') {
                 Write-Host '   skipped.'

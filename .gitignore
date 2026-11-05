@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# 跑 skill 时产生的中间文件。facts.json 里有真实的对话统计，
+# narrative.json 是照着自己对话写的文字，都不该进仓库。
+.agenttime/
+facts.json
+narrative.json
+agenttime_report_*.html

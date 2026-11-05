@@ -130,10 +130,13 @@ python "$SKILL\cli.py" render "$T\facts.json" "$T\narrative.json"
 
 ```
 span.first            第一次对话，2026-03-02 15:29
+span.first_date       2026年03月02日
 span.first_time       15:29
+span.first_hour       15
 span.first_text       第一句话原文
-span.total_days       107
 span.last             最后一次对话时间
+span.last_text        最后一句话原文
+span.total_days       107
 
 volume.sessions       40        会话数
 volume.msgs           612       真人消息数
@@ -174,8 +177,11 @@ agent.denied          16
 
 projects              [{title, n, start, end, tools}, ...]  最多 10 条
 deepest_project       {title, n, start, end, tools}         工具调用最多的那条
-quality               {dirs, ok, skipped_no_user, read_error, filtered_injected}
+sources               {dsh: 40}        每个数据源贡献多少会话
+quality               {dirs, ok, skipped_no_user, read_error, filtered_injected, error_hint}
 ```
+
+列表和字典按下标取，用点号：`{rhythm.busiest_titles.0.0}` 是「最密那天的第一个会话标题」，`{agent.tools_top.0.0}` 是「用得最多的那个工具名」，`{agent.tools_top.0.1}` 是它的次数。取不到（下标越界 / 列表为空）就渲染成空字符串，同时进 `[warn]`。
 
 ## 写作要求
 

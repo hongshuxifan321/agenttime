@@ -91,6 +91,14 @@ install_skill() {
 
     if [[ -e "$dest" || -L "$dest" ]]; then
         if [[ $FORCE -eq 0 ]]; then
+            # 非交互（stdin 不是终端）时 read 会失败，set -e 会直接退出。
+            # 那种情况下按「不覆盖」处理，让 -f 成为明确的选择。
+            if [[ ! -t 0 ]]; then
+                echo "   already exists and stdin is not a terminal; skipping."
+                echo "   re-run with -f to overwrite."
+                return 1
+            fi
+            local answer="n"
             read -r -p "   already exists. overwrite? [y/N] " answer
             if [[ ! "$answer" =~ ^[Yy] ]]; then
                 echo "   skipped."

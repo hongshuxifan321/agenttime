@@ -130,7 +130,15 @@ def load(root: str = ROOT) -> tuple[list[Session], LoadReport]:
     paths = glob.glob(os.path.join(root, "**", "session*.jsonl.zstd"), recursive=True)
     for session_dir in sorted({os.path.dirname(p) for p in paths}):
         report.dirs += 1
-        log = _pick_log(session_dir)
+        try:
+            log = _pick_log(session_dir)
+        except OSError as exc:
+            # 一个目录权限异常不该拖垮整次统计
+            report.read_errors += 1
+            msg = f"{os.path.basename(session_dir)}: {exc}"
+            if msg not in report.errors and len(report.errors) < 3:
+                report.errors.append(msg)
+            continue
         if not log:
             report.read_errors += 1
             continue

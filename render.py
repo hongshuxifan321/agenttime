@@ -117,14 +117,17 @@ def subst(tpl, facts):
     def repl(m):
         path = m.group(1)
         val = get_path(facts, path)
-        if val == "" or val is None:
+        # 空列表 / 空字典同样算「取不到」：直接渲染会变成 [] 或 {} 出现在正文里
+        if val is None or val == "" or val == [] or val == {}:
             MISSING.add(path)
+            return ""
         filters = [f.strip() for f in (m.group(2) or "").split("|") if f.strip()]
         return _fmt(val, filters)
     return PLACE.sub(repl, tpl)
 
 
 def _num_block(num, unit):
+    unit = str(unit) if unit else ""
     unit_html = f'<span class="unit">{html.escape(unit)}</span>' if unit else ""
     return f'  <div class="num">{num}{unit_html}</div>'
 
@@ -259,6 +262,8 @@ def main(argv: list[str]) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
+    MISSING.clear()   # 同一个进程里调第二次时，别把上一次的缺失也报出来
+
     out_path = None
     args = []
     i = 1
@@ -275,12 +280,38 @@ def main(argv: list[str]) -> int:
     tpl_path = args[2] if len(args) > 2 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "template.html")
 
-    with open(facts_path, encoding="utf-8") as fh:
-        facts = json.load(fh)
-    with open(nar_path, encoding="utf-8") as fh:
-        narrative = json.load(fh)
-    with open(tpl_path, encoding="utf-8") as fh:
-        tpl = fh.read()
+    try:
+        with open(facts_path, encoding="utf-8") as fh:
+            facts = json.load(fh)
+    except FileNotFoundError:
+        print(f"找不到 facts 文件：{facts_path}")
+        print("先跑 `python cli.py scan --out facts.json`。")
+        return 1
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"读不了 {facts_path}：{exc}")
+        return 1
+
+    try:
+        with open(nar_path, encoding="utf-8") as fh:
+            narrative = json.load(fh)
+    except FileNotFoundError:
+        print(f"找不到叙事文件：{nar_path}")
+        print("照 narrative.example.json 的样子写一份。")
+        return 1
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"读不了 {nar_path}：{exc}")
+        return 1
+
+    if not isinstance(narrative, dict):
+        print(f"{nar_path} 的顶层应该是一个对象，现在是 {type(narrative).__name__}。")
+        return 1
+
+    try:
+        with open(tpl_path, encoding="utf-8") as fh:
+            tpl = fh.read()
+    except OSError as exc:
+        print(f"读不了模板 {tpl_path}：{exc}")
+        return 1
 
     if "cards" not in narrative and "essay" not in narrative:
         print("narrative.json 结构不对：既没有 cards 也没有 essay。")
@@ -316,7 +347,8 @@ def main(argv: list[str]) -> int:
               + "、".join(sorted(MISSING)))
     # 没能替换的占位符会原样留在报告里。MISSING 抓不到这种（根本没匹配上），
     # 所以渲染完再扫一遍正文，宁可多报一句也别让 {xxx} 出现在读者眼前。
-    leftover = sorted(set(LEFTOVER.findall(cards + "\n" + essay)))
+    leftover = sorted(set(LEFTOVER.findall(
+        "\n".join([cards, essay, headline, turn, footer]))))
     if leftover:
         print("[warn] 这些看着像占位符但没替换成功（检查花括号和拼写）："
               + "、".join(leftover[:8]) + ("…" if len(leftover) > 8 else ""))

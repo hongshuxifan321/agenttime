@@ -40,13 +40,16 @@ def _discover_unknown(adapted=()) -> list:
     items = []
     try:
         items = discover.known(exclude=exclude)
-    except Exception:
-        items = []
+    except Exception as exc:
+        # 静默吞掉会让「探测层崩了」看起来像「机器上没有数据」。
+        # 之前 discover 里一个 NameError 就是这样躲过一次排查的。
+        print(f"[warn] 按已知路径探测失败：{exc}", file=sys.stderr)
     try:
         # 已知路径已经点到的目录，通用扫描不再重复报
         generic = discover.scan(
             exclude=exclude + [_top_dir(i["path"]) for i in items])
-    except Exception:
+    except Exception as exc:
+        print(f"[warn] 扫描主目录失败：{exc}", file=sys.stderr)
         generic = []
     for u in generic:
         items.append({"name": "", "path": u["path"],

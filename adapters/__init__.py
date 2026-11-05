@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from . import dsh
 
 # (名字, 探测函数, 读取函数)
@@ -26,7 +28,9 @@ def available() -> list[tuple[str, str]]:
     for name, detect, _load in REGISTRY:
         try:
             root = detect()
-        except Exception:
+        except Exception as exc:
+            # 探测失败要能看见，不然会被误读成「这台机器没有那个 agent」
+            print(f"[warn] {name} 探测失败：{exc}", file=sys.stderr)
             root = None
         if root:
             found.append((name, root))
