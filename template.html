@@ -130,13 +130,17 @@
 <script>
 function toggleTheme(){
   const h=document.documentElement,c=h.getAttribute('data-theme'),n=c==="dark"?"light":"dark";
-  h.setAttribute("data-theme",n);localStorage.setItem("agenttime-theme",n);
+  h.setAttribute("data-theme",n);
+  // Safari 隐私模式 / 某些 file:// 场景下 localStorage 会直接抛，不能让它中断切换
+  try{localStorage.setItem("agenttime-theme",n);}catch(e){}
   document.getElementById("tb").textContent=n==="dark"?"◐":"◑";
 }
 (function(){
-  const t=localStorage.getItem("agenttime-theme");
-  if(t){document.documentElement.setAttribute("data-theme",t);
-        document.getElementById("tb").textContent=t==="dark"?"◐":"◑";}
+  try{
+    const t=localStorage.getItem("agenttime-theme");
+    if(t){document.documentElement.setAttribute("data-theme",t);
+          document.getElementById("tb").textContent=t==="dark"?"◐":"◑";}
+  }catch(e){}
 })();
 (function(){
   // 不用 IntersectionObserver：headless / 老内核里它可能不触发，
