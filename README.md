@@ -103,6 +103,8 @@ Keep intermediates in `.agenttime/` under the current directory rather than `$en
 
 `narrative.json` contains no digits, only placeholders like `{volume.msgs|comma}` resolved against `facts.json` at render time. Every number in the prose therefore matches the data; the AI cannot invent one.
 
+The report speaks the same language as your conversations. The few fixed strings in the template default to Chinese; for English data, override them through `chrome` in `narrative.json` — see `SKILL.md`.
+
 ## Files
 
 | File | Purpose |

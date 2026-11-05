@@ -113,11 +113,11 @@ function Install-Skill {
     }
 
     Copy-Item -LiteralPath $Source -Destination $dest -Recurse -Force -Exclude @(
-        '.git', '__pycache__', '.agenttime'
+        '.git', '__pycache__', '.agenttime', 'docs'
     )
 
     # Copy-Item -Exclude does not reliably prune directories; clean up after it.
-    foreach ($junk in @('.git', '__pycache__', '.agenttime')) {
+    foreach ($junk in @('.git', '__pycache__', '.agenttime', 'docs')) {
         $p = Join-Path $dest $junk
         if (Test-Path $p) { Remove-Item -LiteralPath $p -Recurse -Force }
     }

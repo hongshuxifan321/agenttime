@@ -15,7 +15,13 @@ import re
 import sys
 from datetime import datetime
 
-PLACE = re.compile(r"\{([A-Za-z_][\w.\-]*)((?:\|[a-z]+)*)\}")
+# 容忍花括号和竖线两侧的空格：{volume.msgs | comma} 和 { volume.msgs } 都认。
+# 不写死成紧凑形式，是因为这类空格一旦漏掉，占位符会原样出现在报告里，
+# 而且不会进 MISSING——静默出错最难查。
+PLACE = re.compile(r"\{\s*([A-Za-z_][\w.\-]*)\s*((?:\|\s*[a-z]+\s*)*)\}")
+
+# 渲染完之后仍像占位符的片段，用来兜底报警
+LEFTOVER = re.compile(r"\{[^{}\n]{1,60}\}")
 
 
 def get_path(data, path):
@@ -98,7 +104,8 @@ def subst(tpl, facts):
         val = get_path(facts, path)
         if val == "" or val is None:
             MISSING.add(path)
-        return _fmt(val, (m.group(2) or "").split("|"))
+        filters = [f.strip() for f in (m.group(2) or "").split("|") if f.strip()]
+        return _fmt(val, filters)
     return PLACE.sub(repl, tpl)
 
 
@@ -164,6 +171,28 @@ def _daterange(facts) -> str:
     first = str(span.get("first") or "")[:10].replace("-", ".")
     last = str(span.get("last") or "")[:10].replace("-", ".")
     return f"{first} — {last}" if first and last else ""
+
+
+_SOURCE_NAMES = {
+    "dsh": "DeepSeek Harness",
+    "claude_code": "Claude Code",
+    "codex": "Codex",
+    "zcode": "ZCode",
+}
+
+
+def _source_line(facts) -> str:
+    """页脚那半句话：这份报告到底读了哪些 agent。
+
+    合并多个源时，读者需要知道覆盖范围——否则一份报告看起来像
+    「你这段时间什么都没干」，而其实只是别的 agent 没接进来。
+    """
+    src = facts.get("sources") or {}
+    if not src:
+        return "本机对话记录"
+    parts = [f"{_SOURCE_NAMES.get(name, name)} 的 {n} 个会话"
+             for name, n in sorted(src.items(), key=lambda kv: -kv[1])]
+    return "、".join(parts)
 
 
 def default_out() -> str:
@@ -236,13 +265,32 @@ def main(argv: list[str]) -> int:
     cards = "\n\n".join(card_html(c, facts) for c in narrative["cards"])
     essay = "\n".join(f"<p>{subst(p, facts)}</p>" for p in narrative["essay"])
 
-    page = (tpl.replace("<!-- HEADLINE -->", _headline(facts))
+    # 模板里那几句固定文案（标题、转场、页脚）默认是中文。报告的语种要跟数据一致，
+    # 英文数据就由 narrative.chrome 覆盖掉；不写 chrome 就保持中文默认。
+    chrome = narrative.get("chrome") or {}
+    headline = chrome.get("headline") or _headline(facts)
+    title = chrome.get("title") or headline.replace("<br>", " ")
+    turn = chrome.get("turn") or "翻到这里，剩下的不是数字了"
+    footer = chrome.get("footer") or (
+        f"数据来自 {_source_line(facts)}，全部在本地读取。"
+        "系统注入的上下文、指令与技能目录不计入。")
+
+    page = (tpl.replace("<!-- TITLE -->", title)
+               .replace("<!-- HEADLINE -->", headline)
                .replace("<!-- RANGE -->", _daterange(facts))
+               .replace("<!-- TURN -->", turn)
+               .replace("<!-- FOOTER -->", footer)
                .replace("<!-- CARDS -->", cards)
                .replace("<!-- ESSAY -->", essay))
     if MISSING:
         print("[warn] 这些占位符在 facts.json 里找不到，已渲染为空："
               + "、".join(sorted(MISSING)))
+    # 没能替换的占位符会原样留在报告里。MISSING 抓不到这种（根本没匹配上），
+    # 所以渲染完再扫一遍正文，宁可多报一句也别让 {xxx} 出现在读者眼前。
+    leftover = sorted(set(LEFTOVER.findall(cards + "\n" + essay)))
+    if leftover:
+        print("[warn] 这些看着像占位符但没替换成功（检查花括号和拼写）："
+              + "、".join(leftover[:8]) + ("…" if len(leftover) > 8 else ""))
     # 用户明确指定 --out 时可以覆盖；用默认文件名时一份都不覆盖
     final = write_out(page, out_path or default_out(),
                       allow_overwrite=bool(out_path))

@@ -107,11 +107,12 @@ install_skill() {
     fi
 
     mkdir -p "$dest"
-    # Copy everything except VCS metadata and caches.
+    # Copy everything except VCS metadata, caches, and the README screenshots.
     (cd "$SOURCE" && tar -cf - \
         --exclude='.git' \
         --exclude='__pycache__' \
         --exclude='.agenttime' \
+        --exclude='docs' \
         .) | (cd "$dest" && tar -xf -)
 
     echo "   copied."

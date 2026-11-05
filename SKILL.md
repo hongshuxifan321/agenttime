@@ -15,7 +15,9 @@ user-invocable: true
 
 ### 第一步：跑数据
 
-先确定 skill 目录。**不要假设它装在 `~/.dsh/skills/`**——用户可能把它放在 `~/.claude/skills/` 或别处。运行环境一般会给（DSH 在 skill 内容里提供 `Base directory`），拿不到就用脚本所在目录。
+先确定 skill 目录。**不要假设它装在 `~/.dsh/skills/`**——用户可能把它放在 `~/.claude/skills/` 或别处。运行环境一般会告诉（DSH 在 skill 内容里给 `Base directory`）。
+
+拿不到路径就按常见位置挨个试，看哪个里面有 `cli.py`：`~/.dsh/skills/agenttime`、`~/.claude/skills/agenttime`、`~/.codex/skills/agenttime`。
 
 ```powershell
 $SKILL = "<本 SKILL.md 所在目录>"
@@ -23,6 +25,8 @@ $T = Join-Path (Get-Location) ".agenttime"
 New-Item -ItemType Directory -Force -Path $T | Out-Null
 python "$SKILL\cli.py" scan --out "$T\facts.json"
 ```
+
+非 Windows 平台换成 bash：`mkdir -p .agenttime && python "$SKILL/cli.py" scan --out .agenttime/facts.json`。
 
 中间文件放**当前工作目录**下的 `.agenttime/`，不要用 `$env:TEMP`：在 DSH 的沙箱里，会话 TEMP 是 `Temp\dsh-xxxx`，提权进程的是 `Temp`，中途提权会找不到文件。
 
@@ -86,6 +90,23 @@ python "$SKILL\cli.py" render "$T\facts.json" "$T\narrative.json"
 | 词云卡 | `chips_from` | 从 facts 取 `[[词, 次数], ...]`，取前 10 |
 
 每张卡都必须有 `idx`、`kicker`；`fact` 和 `aside` 至少有一个。
+
+### 报告的语言
+
+模板里那几句固定文案默认是中文：封面标题、转场句、页脚。报告语种要跟数据一致——用户拿英文跟我对话，就该拿到英文报告，不能只有内文是英文、外壳还是中文。
+
+在 `narrative.json` 里加 `chrome` 覆盖，四个字段都可选，不写就用中文默认：
+
+```json
+"chrome": {
+  "title": "Three months, in numbers",
+  "headline": "Three months<br>in numbers",
+  "turn": "Past this point, it stops being numbers",
+  "footer": "Built from DeepSeek Harness. Everything read locally."
+}
+```
+
+`headline` 可以带 `<br>`，`title` 会被拿去当浏览器标签页标题，别放标签。卡片和散文是你自己写的，语种自然跟着走。
 
 ## 占位符
 

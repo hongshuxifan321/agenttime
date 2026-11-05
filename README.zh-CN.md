@@ -103,6 +103,8 @@ python cli.py render facts.json narrative.json
 
 `narrative.json` 里不写数字，只写 `{volume.msgs|comma}` 这样的占位符，渲染时从 `facts.json` 取值。所以文案里的每个数字都和数据一致，AI 编不出来。
 
+报告语种跟数据一致。模板里那几句固定文案默认中文，英文对话可以在 `narrative.json` 的 `chrome` 里覆盖掉，细节见 `SKILL.md`。
+
 ## 文件
 
 | 文件 | 作用 |
