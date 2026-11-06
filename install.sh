@@ -141,6 +141,56 @@ move_aside() {
     printf '%s\n' "$candidate"
 }
 
+dir_id() {
+    # 目录身份：设备号 + inode + 创建时间。换名不改它们；被别的进程「移走再
+    # 建一个新的」就会变。文件系统会把释放的 inode 分给新文件，所以创建时间
+    # 一起算进来，不能只看 inode。
+    local path="$1" out=""
+    if out="$(stat -c '%d:%i:%w' -- "$path" 2>/dev/null)"; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    if out="$(stat -c '%d:%i:%W' -- "$path" 2>/dev/null)"; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    if out="$(stat -f '%d:%i:%B' -- "$path" 2>/dev/null)"; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    return 1
+}
+
+# take_backup 要把结果交给调用者的变量，bash 没有闭包，沿用 AT_* 中继。
+AT_TAKE_PATH=""
+AT_BACKUP_VERIFIED=0
+take_backup() {
+    # 把旧安装挪成备份，并核对挪走的确实是安装开始时看到的那一份目录。
+    # 「开始时存在」不等于「现在还是它」：别的进程可以在中间移走旧目录、在
+    # 原路径建个新的。身份对不上就不接管——能放回就放回，放不回就保留并报路径。
+    local path="$1" expected="$2" moved moved_id
+    AT_TAKE_PATH=""
+    AT_BACKUP_VERIFIED=0
+    moved="$(move_aside "$path")" || return 1
+    if [[ -z "$expected" ]]; then
+        # 取不到身份（没有 stat）：搬走了但无法确认，后面绝不删这份备份
+        AT_TAKE_PATH="$moved"
+        return 0
+    fi
+    moved_id="$(dir_id "$moved")" || moved_id=""
+    if [[ "$moved_id" != "$expected" ]]; then
+        if rename_noreplace "$moved" "$path"; then
+            echo "   publish failed; the destination was replaced by another process." >&2
+        else
+            echo "   publish failed; the destination was replaced by another process, and the directory found there is kept at: $moved" >&2
+        fi
+        return 1
+    fi
+    AT_BACKUP_VERIFIED=1
+    AT_TAKE_PATH="$moved"
+    return 0
+}
+
 # restore_backup 要改调用者的局部变量，bash 没有闭包，只好借这两个中继。
 AT_DEST=""
 AT_BACKUP=""
@@ -188,7 +238,12 @@ install_skill() {
         return 1
     fi
 
+    # 记下「确认覆盖时目标是不是旧安装」以及它的目录身份。后面再看到目标存在
+    # 时，只有身份仍然对得上才算旧安装；中途冒出来的一律当别人的目录。
+    local dest_existed=0 dest_id=""
     if [[ -e "$dest" || -L "$dest" ]]; then
+        dest_existed=1
+        dest_id="$(dir_id "$dest")" || dest_id=""
         if [[ $FORCE -eq 0 ]]; then
             # 非交互（stdin 不是终端）时 read 会失败，set -e 会直接退出。
             # 那种情况下按「不覆盖」处理，让 -f 成为明确的选择。
@@ -213,15 +268,30 @@ install_skill() {
     local backup="" staging="" published=0
 
     if [[ $LINK -eq 1 ]]; then
-        if [[ -e "$dest" || -L "$dest" ]]; then
-            backup="$(move_aside "$dest")" || return 1
+        if [[ $dest_existed -eq 1 ]]; then
+            AT_TAKE_PATH=""
+            take_backup "$dest" "$dest_id" || return 1
+            backup="$AT_TAKE_PATH"
         fi
-        if ln -s "$SOURCE" "$dest" 2>/dev/null; then
+        # 链接先建在唯一暂存名上，再用拒绝覆盖的换名发布。这样失败时只可能
+        # 留下本次的暂存链接；$dest 里是谁的东西都不归我们删除——之前这里是
+        # 「建链失败就 rm -f $dest 再来一遍」，而且 ln -s 的目标若是已存在的
+        # 目录，会把链接建到那个目录里面还返回成功。
+        local link_staging="$skills_dir/.new-$SKILL_NAME-$$-$RANDOM"
+        if ln -s -- "$SOURCE" "$link_staging" 2>/dev/null &&
+            rename_noreplace "$link_staging" "$dest"; then
             echo "   linked."
             published=1
         else
+            if [[ -e "$link_staging" || -L "$link_staging" ]]; then
+                rm -f -- "$link_staging" 2>/dev/null || true
+            fi
+            if [[ -e "$dest" || -L "$dest" ]]; then
+                echo "   link failed; the destination was created by another process." >&2
+                AT_DEST="$dest"; AT_BACKUP="$backup"; restore_backup
+                return 1
+            fi
             echo "   link failed, copying instead."
-            rm -f -- "$dest" 2>/dev/null || true
         fi
     fi
 
@@ -253,8 +323,23 @@ install_skill() {
             return 1
         fi
 
-        if [[ -z "$backup" && ( -e "$dest" || -L "$dest" ) ]]; then
-            backup="$(move_aside "$dest")" || { rm -rf -- "$staging"; return 1; }
+        # 旧安装只有在确认覆盖时就是它自己，才可以挪去当备份；一开始不存在、
+        # 复制期间才出现的目标只可能是别的进程建的，一律不接管、不删除。
+        if [[ -e "$dest" || -L "$dest" ]]; then
+            if [[ $dest_existed -eq 0 ]]; then
+                echo "   publish failed; the destination was created by another process." >&2
+                rm -rf -- "$staging"
+                AT_DEST="$dest"; AT_BACKUP="$backup"; restore_backup
+                return 1
+            fi
+            if [[ -z "$backup" ]]; then
+                AT_TAKE_PATH=""
+                if ! take_backup "$dest" "$dest_id"; then
+                    rm -rf -- "$staging"
+                    return 1
+                fi
+                backup="$AT_TAKE_PATH"
+            fi
         fi
 
         # 旧安装移走之后、发布之前，目标可能被别的进程重新建出来。
@@ -283,8 +368,11 @@ install_skill() {
     fi
 
     # 新安装已就位。清理旧副本失败只警告：不能为了删备份再回滚。
+    # 身份没核对过的备份一律不删——删错就找不回来了。
     if [[ -n "$backup" && ( -e "$backup" || -L "$backup" ) ]]; then
-        if ! rm -rf -- "$backup"; then
+        if [[ $AT_BACKUP_VERIFIED -ne 1 ]]; then
+            echo "   warning: the new install is in place, but the old copy could not be verified; kept at: $backup" >&2
+        elif ! rm -rf -- "$backup"; then
             echo "   warning: the new install is in place, but the old copy could not be removed: $backup" >&2
         fi
     fi

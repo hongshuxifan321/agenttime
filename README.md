@@ -67,7 +67,7 @@ The script looks for skill directories that already exist on this machine — `~
 | Flag | Effect |
 |---|---|
 | `-Target <dir>` / `-t <dir>` | Install into a specific directory |
-| `-Link` / `-l` | Symlink instead of copying, so edits apply immediately (on Windows this needs Developer Mode or an elevated shell; falls back to copying) |
+| `-Link` / `-l` | Symlink instead of copying, so edits apply immediately (on Windows this needs Developer Mode or an elevated shell; otherwise it copies) |
 | `-Force` / `-f` | Overwrite an existing install without asking |
 
 ### Let the agent do it

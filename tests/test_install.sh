@@ -41,7 +41,7 @@ rm() {
     if [[ -e "$path" || -L "$path" ]]; then exists=1; fi
     if [[ "$path" == */.old-* ]]; then
         if [[ $exists -eq 1 ]]; then note cleanup; fi
-        if [[ "$FAIL_AT" == *cleanup* ]]; then return 1; fi
+        if has_fail cleanup; then return 1; fi
         command rm -rf -- "$path"
         return 0
     fi
@@ -57,7 +57,7 @@ rm() {
 
 mkdir() {
     local path="${*: -1}"
-    if [[ "$path" == */.new-* && "$FAIL_AT" == *staging* ]]; then
+    if [[ "$path" == */.new-* ]] && has_fail staging; then
         note mkdir-staging
         return 1
     fi
@@ -67,17 +67,30 @@ mkdir() {
 tar() {
     if [[ " $* " == *" -cf "* ]]; then
         note copy
-        if [[ "$FAIL_AT" == *copy* ]]; then return 1; fi
+        if has_fail copy; then return 1; fi
         return 0
     fi
     # 解包这一步跑在暂存目录里：造一个标记文件，模拟真实拷贝的产物
+    if has_fail claim-copy; then
+        # 模拟复制期间另一个进程把目标目录建出来
+        command mkdir -p "$OCCUPY_DEST"
+        printf 'foreign\n' > "$OCCUPY_DEST/SKILL.md"
+    fi
+    if has_fail claim-copy-replace; then
+        # 模拟复制期间另一个进程把旧目录移走、在原路径建一个新的
+        command rm -rf -- "$OCCUPY_DEST"
+        command mkdir -p "$OCCUPY_DEST"
+        printf 'foreign\n' > "$OCCUPY_DEST/SKILL.md"
+    fi
     printf 'staged\n' > SKILL.md
     return 0
 }
 
 ln() {
     note link
-    if [[ "$FAIL_AT" == *link* ]]; then return 1; fi
+    if has_fail link; then return 1; fi
+    # 造一个「链接工件」，后面的换名才有东西可搬
+    command mkdir -p "${*: -1}"
     return 0
 }
 
@@ -123,6 +136,7 @@ WORK="$(mktemp -d)"
 cleanup_work() { command rm -rf -- "$WORK"; command rm -f -- "$OPS"; }
 trap cleanup_work EXIT
 SKILLS="$WORK/skills"
+OCCUPY_DEST="$SKILLS/existing"
 mkdir -p "$SKILLS/existing"
 printf 'old install\n' > "$SKILLS/existing/keep.txt"
 SKILL_NAME='existing'
@@ -195,7 +209,7 @@ start_case
 if ! install_skill "$SKILLS" > /dev/null 2>&1; then
     echo 'a link installation failed' >&2; exit 1
 fi
-expect_log 'aside,link,cleanup'
+expect_log 'aside,link,publish,cleanup'
 LINK=0
 echo 'PASS: link installation backs up the old copy and cleans up'
 
@@ -261,3 +275,54 @@ fi
 [[ -f "$SKILLS/existing/keep.txt" ]] || { echo 'the refusal path lost the old install' >&2; exit 1; }
 AT_MV_T="$saved_mv_t"; AT_PERL="$saved_perl"
 echo 'PASS: no rename primitive refuses the install instead of moving anything'
+
+# 全新安装：复制期间目标被别人建出来，不能当成旧安装接管后再删掉
+command rm -rf -- "$SKILLS/existing" "$SKILLS"/.old-existing-* "$SKILLS"/.new-existing-*
+start_case 'claim-copy'
+if install_skill "$SKILLS" > /dev/null 2>&1; then
+    echo 'a destination created during the copy did not fail' >&2; exit 1
+fi
+expect_log 'copy,drop-staging'
+if [[ "$(cat "$SKILLS/existing/SKILL.md" 2>/dev/null)" != foreign ]]; then
+    echo 'the foreign destination was removed or taken over' >&2; exit 1
+fi
+if [[ -n "$(find "$SKILLS" -maxdepth 1 -name '.old-existing-*' -print -quit)" ]]; then
+    echo 'a foreign directory was adopted as a backup' >&2; exit 1
+fi
+echo 'PASS: a destination created during the copy is refused, not adopted'
+
+# 目标原本存在，但复制期间被别的进程「移走 + 原位重建」：身份对不上，
+# 不能把后来出现的目录当成旧安装备份再删掉
+reset_fixture
+start_case 'claim-copy-replace'
+if install_skill "$SKILLS" > /dev/null 2>&1; then
+    echo 'a replaced destination was adopted as the backup' >&2; exit 1
+fi
+expect_log 'copy,aside,rollback,drop-staging'
+if [[ "$(cat "$SKILLS/existing/SKILL.md" 2>/dev/null)" != foreign ]]; then
+    echo 'the replaced destination was removed or modified' >&2; exit 1
+fi
+if [[ -n "$(find "$SKILLS" -maxdepth 1 -name '.old-existing-*' -print -quit)" ]]; then
+    echo 'a directory this run did not create was left as a backup' >&2; exit 1
+fi
+echo 'PASS: a destination replaced during the copy is not adopted'
+
+# 链接模式：换名失败时目标被别人占住，只清理本次的暂存链接
+reset_fixture
+LINK=1
+start_case 'claim-publish'
+if install_skill "$SKILLS" > /dev/null 2>&1; then
+    echo 'a link publish into an occupied destination did not fail' >&2; exit 1
+fi
+expect_log 'aside,link,publish,drop-staging'
+if [[ -z "$(find "$SKILLS" -maxdepth 1 -name '.old-existing-*' -print -quit)" ]]; then
+    echo 'the backup was lost when the link publish failed' >&2; exit 1
+fi
+if [[ "$(cat "$SKILLS/existing/SKILL.md" 2>/dev/null)" != foreign ]]; then
+    echo 'the foreign destination was modified by the failed link' >&2; exit 1
+fi
+if [[ -n "$(find "$SKILLS/existing" -maxdepth 1 -name '.new-*' -print -quit 2>/dev/null)" ]]; then
+    echo 'the staging link was left inside the foreign destination' >&2; exit 1
+fi
+LINK=0
+echo 'PASS: a failed link removes only its own staging link'

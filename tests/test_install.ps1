@@ -12,7 +12,7 @@ $tokens = $null
 $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($installer, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Installer syntax errors.' }
-foreach ($name in @('Get-SkillsDirs', 'Resolve-InstallPath', 'Move-Dir', 'Move-Side', 'Install-Skill')) {
+foreach ($name in @('Get-SkillsDirs', 'Resolve-InstallPath', 'Move-Dir', 'Move-Side', 'Get-DirectoryId', 'Take-Backup', 'Install-Skill')) {
     $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
     if (-not $fn) { throw "Missing function: $name" }
     Invoke-Expression $fn.Extent.Text
@@ -66,6 +66,7 @@ $occupyFile = Join-Path $stateRoot 'occupy.txt'
 [IO.File]::WriteAllText($failFile, '')
 [IO.File]::WriteAllText($logFile, '')
 [IO.File]::WriteAllText($occupyFile, '')
+$foreignDest = ''   # 复制过程中要抢占的目标（由 Copy-Item 的 mock 使用）
 
 function Get-FailList {
     @(([IO.File]::ReadAllText($failFile)) -split ',' | Where-Object { $_ })
@@ -78,10 +79,24 @@ function Note {
     [IO.File]::AppendAllText($logFile, $Step + "`n")
 }
 function Start-Case {
-    param([string[]]$Failure = @(), [switch]$Occupy)
+    param([string[]]$Failure = @(), [switch]$Occupy, [switch]$OccupyCopy, [switch]$OccupyLink, [switch]$OccupyReplace)
     [IO.File]::WriteAllText($failFile, ($Failure -join ','))
     [IO.File]::WriteAllText($logFile, '')
-    [IO.File]::WriteAllText($occupyFile, $(if ($Occupy) { 'yes' } else { '' }))
+    $mode = ''
+    if ($Occupy -and $OccupyCopy) { $mode = 'both' }
+    elseif ($Occupy) { $mode = 'publish' }
+    elseif ($OccupyCopy) { $mode = 'copy' }
+    elseif ($OccupyLink) { $mode = 'link' }
+    elseif ($OccupyReplace) { $mode = 'replace' }
+    [IO.File]::WriteAllText($occupyFile, $mode)
+}
+function Get-OccupyMode {
+    ([IO.File]::ReadAllText($occupyFile)).Trim()
+}
+function New-ForeignDest {
+    param([string]$Path)
+    [IO.Directory]::CreateDirectory($Path) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $Path 'foreign-keep.txt'), 'foreign')
 }
 function Expect-Log {
     param([string]$Want)
@@ -106,6 +121,15 @@ function Copy-Item {
     # 造一个够用的暂存目录：发布之后 $dest\SKILL.md 必须存在，否则算装错
     [IO.Directory]::CreateDirectory($Destination) | Out-Null
     [IO.File]::WriteAllText((Join-Path $Destination 'SKILL.md'), 'staged')
+    # 模拟复制过程中另一个进程把目标建出来 / 移走再原位重建
+    $mode = Get-OccupyMode
+    if ($script:foreignDest -and ($mode -eq 'copy' -or $mode -eq 'both')) {
+        New-ForeignDest -Path $script:foreignDest
+    }
+    if ($script:foreignDest -and $mode -eq 'replace') {
+        if ([IO.Directory]::Exists($script:foreignDest)) { [IO.Directory]::Delete($script:foreignDest, $true) }
+        New-ForeignDest -Path $script:foreignDest
+    }
 }
 
 function Move-Dir {
@@ -116,8 +140,9 @@ function Move-Dir {
     else { $step = 'aside' }
     Note $step
     if ((Get-FailList) -contains $step) { throw "mock $step failure" }
-    if ($step -eq 'publish' -and [IO.File]::ReadAllText($occupyFile) -eq 'yes') {
-        [IO.Directory]::CreateDirectory($To) | Out-Null   # 另一个进程抢先建好了目标
+    $mode = Get-OccupyMode
+    if ($step -eq 'publish' -and ($mode -eq 'publish' -or $mode -eq 'both')) {
+        New-ForeignDest -Path $To   # 另一个进程抢先建好了目标
     }
     [IO.Directory]::Move($From, $To)
 }
@@ -142,7 +167,21 @@ function New-Item {
     # 只关心建符号链接；建目录本来就会成功，不必记录。
     [CmdletBinding()]
     param($Path, $ItemType, $Target, [switch]$Force)
-    if ($ItemType -eq 'SymbolicLink') { Note 'link' }
+    if ($ItemType -eq 'SymbolicLink') {
+        Note 'link'
+        if ((Get-FailList) -contains 'link') { throw 'mock link failure (A required privilege is not held by the client)' }
+        # 模拟「建链之前另一个进程占住了目标」：目标被建出来，New-Item 因
+        # 路径已存在而失败——这正是 review 里的复现步骤。
+        if ($script:foreignDest -and (Get-OccupyMode) -eq 'link') {
+            New-ForeignDest -Path $script:foreignDest
+            throw 'mock New-Item: an item with the specified name already exists'
+        }
+        if ([IO.Directory]::Exists($Path) -or [IO.File]::Exists($Path)) {
+            throw 'mock New-Item: an item with the specified name already exists'
+        }
+        # 用一个空目录代表链接工件，后续的换名才有东西可搬
+        [IO.Directory]::CreateDirectory($Path) | Out-Null
+    }
 }
 
 $aliasPath = ''
@@ -219,6 +258,21 @@ function Get-Backups {
 
 Reset-Fixture
 
+# 0) 身份读取本身要对：结构体布局、换名不变、新建的不同
+#    （FILETIME 曾按 long 声明，结构体变 56 字节、卷号和文件 ID 全部错位）
+$probeA = Join-Path $fixtureRoot 'id-probe-a'
+[IO.Directory]::CreateDirectory($probeA) | Out-Null
+$idA = Get-DirectoryId -Path $probeA
+if (-not $idA) { throw 'Directory identity is unavailable.' }
+if (-not [AgentTimeFileId]::ShapeIsValid()) { throw 'BY_HANDLE_FILE_INFORMATION has the wrong size or field offsets.' }
+[IO.Directory]::Move($probeA, (Join-Path $fixtureRoot 'id-probe-b'))
+if ((Get-DirectoryId -Path (Join-Path $fixtureRoot 'id-probe-b')) -ne $idA) {
+    throw 'Directory identity changed across a rename.'
+}
+[IO.Directory]::CreateDirectory($probeA) | Out-Null
+if ((Get-DirectoryId -Path $probeA) -eq $idA) { throw 'A new directory got the same identity.' }
+Write-Host 'PASS: directory identity is read with the native layout and follows renames'
+
 # 1) 复制失败：旧安装还没被碰过
 Start-Case 'copy'
 Expect-Throw { Install-Skill -SkillsDir $fixtureRoot } '*copy failure*' 'Copy failure'
@@ -270,13 +324,14 @@ if (-not $result) { throw 'A fresh installation failed.' }
 if (-not (Test-Path -LiteralPath (Join-Path $fixtureRoot 'fresh-install-test\SKILL.md'))) { throw 'A fresh install did not publish.' }
 Write-Host 'PASS: a fresh installation skips the backup steps'
 
-# 6) 链接安装：不拷文件，但同样先备份再建链
+# 6) 链接安装：不拷文件，但同样先建在暂存名上，再换名发布
 Reset-Fixture
 $Link = $true
 Start-Case
 $result = Install-Skill -SkillsDir $fixtureRoot
-Expect-Log 'aside,link,cleanup'
+Expect-Log 'aside,link,publish,cleanup'
 if (-not $result) { throw 'A link installation failed.' }
+if ((Get-Backups).Count -ne 0) { throw 'A link installation left the backup behind.' }
 Write-Host 'PASS: link installation backs up the old copy and cleans up'
 
 # 7) 旧安装移走之后目标被别人重新建出来：不能把暂存塞进目标里面
@@ -291,6 +346,62 @@ $nested = @(Get-ChildItem -LiteralPath $destPath -Force -ErrorAction SilentlyCon
             Where-Object { $_.Name -like '.new-*' })
 if ($nested.Count -ne 0) { throw 'The staged directory was left inside the foreign destination.' }
 Write-Host 'PASS: a re-created destination is refused, backup kept'
+
+# 8) 链接模式：建链之前目标被别人占住（New-Item 因路径已存在而失败），
+#    只清理本次的暂存链接；不许删掉别人刚建的目录
+Reset-Fixture
+$Link = $true
+$foreignDest = $destPath
+Start-Case -OccupyLink
+Expect-Throw { Install-Skill -SkillsDir $fixtureRoot } '*created by another process*' 'Occupied destination during link'
+Expect-Log 'aside,link,rollback'
+$foreignDest = ''
+if ((Get-Backups).Count -ne 1) { throw 'A failed link attempt lost the backup.' }
+if (-not (Test-Path -LiteralPath (Join-Path $destPath 'foreign-keep.txt'))) {
+    throw 'A failed link attempt deleted a directory it did not create.'
+}
+if (Test-Path -LiteralPath (Join-Path $destPath 'SKILL.md')) { throw 'The staging link was published inside the foreign destination.' }
+$nested = @(Get-ChildItem -LiteralPath $destPath -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like '.new-*' })
+if ($nested.Count -ne 0) { throw 'A staging link was left inside the foreign destination.' }
+Write-Host 'PASS: a failed link never deletes a directory it did not create'
+
+# 9) 全新安装：目标在复制过程中被别人建出来，不能把它当成旧安装接管再删掉
+if ([IO.Directory]::Exists($fixtureRoot)) { [IO.Directory]::Delete($fixtureRoot, $true) }
+[IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
+Start-Case -OccupyCopy
+$SkillName = 'existing'
+$Source = $originalSource
+$Force = $true
+$Link = $false
+$foreignDest = $destPath
+Expect-Throw { Install-Skill -SkillsDir $fixtureRoot } '*created by another process*' 'Destination appeared during copy'
+$foreignDest = ''
+Expect-Log 'copy,drop-staging'
+if (-not (Test-Path -LiteralPath (Join-Path $destPath 'foreign-keep.txt'))) {
+    throw 'A foreign directory created during the copy was removed or adopted.'
+}
+if (Test-Path -LiteralPath (Join-Path $destPath 'SKILL.md')) { throw 'The staging copy was published into the foreign destination.' }
+if ((Get-Backups).Count -ne 0) { throw 'A foreign directory was taken over as a backup.' }
+Write-Host 'PASS: a destination created during the copy is refused, not adopted'
+
+# 10) 目标原本存在，但复制期间被别的进程移走并原位重建：身份对不上，
+#     不能把后来出现的目录当成旧安装备份再删掉
+Reset-Fixture
+$Link = $false
+$foreignDest = $destPath
+Start-Case -OccupyReplace
+Expect-Throw { Install-Skill -SkillsDir $fixtureRoot } '*replaced by another process*' 'Replaced destination'
+$foreignDest = ''
+Expect-Log 'copy,aside,rollback,drop-staging'
+if ((Get-Backups).Count -ne 0) { throw 'A replaced destination was adopted as a backup.' }
+if (-not (Test-Path -LiteralPath (Join-Path $destPath 'foreign-keep.txt'))) {
+    throw 'The replaced destination was removed or modified.'
+}
+$nested = @(Get-ChildItem -LiteralPath $destPath -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like '.new-*' -or $_.Name -like '.old-*' })
+if ($nested.Count -ne 0) { throw 'Staging or backup leftovers were left inside the replaced destination.' }
+Write-Host 'PASS: a destination replaced during the copy is not adopted'
 
 if ([IO.Directory]::Exists($fixtureRoot)) { [IO.Directory]::Delete($fixtureRoot, $true) }
 [IO.Directory]::Delete($stateRoot, $true)
