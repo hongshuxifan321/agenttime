@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 
 from adapters.base import LoadReport, Session
 
@@ -167,7 +168,9 @@ def build_facts(sessions: list[Session], report: LoadReport | None = None) -> di
                  "first_text": first.text[:120],
                  "last_text": last.text[:120],
                  "total_days": total_days,
-                 "months": max(1, round(total_days / 30)),
+                 # 四舍五入，不是内置 round() 的银行家舍入：75 天 / 30 = 2.5 要算 3 个月
+                 "months": max(1, int((Decimal(total_days) / 30).to_integral_value(
+                     rounding=ROUND_HALF_UP))),
                  "first_day": first.dt.strftime("%Y.%m.%d"),
                  "last_day": last.dt.strftime("%Y.%m.%d")},
         "volume": {"sessions": len(sessions), "msgs": len(all_msgs),

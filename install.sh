@@ -96,6 +96,40 @@ canonical_path() {
     fi
 }
 
+# 换名原语。普通 `mv` 在目标已经是目录时会把源目录搬进目标里面
+# （dest/.new-xxx），还返回 0：装完看着成功，新安装其实没落在 dest 上，
+# 旧备份随后被当成废物删掉。所以「发布」和「回滚」这两步一律走下面的
+# rename_noreplace——目标已存在（非空）就失败，任何情况下都不会嵌套。
+# 这类竞态没法靠「换名前再查一次」消除：检查和换名之间总有空隙，只能让
+# 换名本身具备「目标已存在则拒绝」的语义。
+# 两个原语都没有时不做「先普通 mv 再事后搬回」：搬回本身也会失败，届时
+# 提示里的备份路径已经不存在，比直接拒绝更糟。所以这种情况直接不装。
+AT_MV_T=0
+AT_PERL=0
+if command mv --help 2>/dev/null | grep -q -- ' -T'; then
+    AT_MV_T=1
+elif command -v perl >/dev/null 2>&1; then
+    AT_PERL=1
+fi
+
+rename_noreplace() {
+    local src="$1" dst="$2"
+    if [[ "${AT_MV_T:-0}" -eq 1 ]]; then
+        # GNU coreutils：-T 关掉「目标目录即容器」的语义，失败即未迁移
+        if mv -T -- "$src" "$dst"; then return 0; fi
+        return 1
+    fi
+    if [[ "${AT_PERL:-0}" -eq 1 ]]; then
+        # rename(2) 语义：目标是非空目录时 ENOTEMPTY，天然不会嵌套
+        if perl -e 'exit(rename($ARGV[0], $ARGV[1]) ? 0 : 1)' -- "$src" "$dst"; then
+            return 0
+        fi
+        return 1
+    fi
+    echo "   no atomic no-replace rename; nothing was moved." >&2
+    return 1
+}
+
 move_aside() {
     # Move an existing install out of the way under a hidden sibling name.
     # Prints the new path; returns non-zero if the move fails.
@@ -103,7 +137,7 @@ move_aside() {
     parent="$(dirname -- "$path")"
     base="$(basename -- "$path")"
     candidate="$parent/.old-$base-$$-$RANDOM"
-    mv -- "$path" "$candidate" || return 1
+    rename_noreplace "$path" "$candidate" || return 1
     printf '%s\n' "$candidate"
 }
 
@@ -112,16 +146,20 @@ AT_DEST=""
 AT_BACKUP=""
 restore_backup() {
     [[ -n "$AT_BACKUP" ]] || return 0
+    # 目标被占用时不再去删它：删别人的目录比多留一份备份危险得多
     if [[ -e "$AT_DEST" || -L "$AT_DEST" ]]; then
-        rm -rf -- "$AT_DEST" 2>/dev/null || true
+        echo "   rollback failed; the destination is occupied, the previous copy is still at: $AT_BACKUP" >&2
+        return 1
     fi
-    if mv -- "$AT_BACKUP" "$AT_DEST" 2>/dev/null; then
-        echo "   old installation restored." >&2
-        AT_BACKUP=""
-        return 0
+    # 检查之后目标仍可能被别人建出来；换名本身拒绝已存在的目标，所以备份
+    # 不会被塞进别人目录里，失败时 AT_BACKUP 保持原值（调用方据此保留备份）
+    if ! rename_noreplace "$AT_BACKUP" "$AT_DEST"; then
+        echo "   rollback failed; the previous copy is still at: $AT_BACKUP" >&2
+        return 1
     fi
-    echo "   rollback failed; the previous copy is still at: $AT_BACKUP" >&2
-    return 1
+    echo "   old installation restored." >&2
+    AT_BACKUP=""
+    return 0
 }
 
 install_skill() {
@@ -139,6 +177,14 @@ install_skill() {
     fi
     if [[ "$source_path/" == "$dest_path/"* || "$dest_path/" == "$source_path/"* ]]; then
         echo "   source and destination must not contain each other." >&2
+        return 1
+    fi
+
+    # 没有可靠换名原语就什么都不做：普通 mv 在目标被占时会嵌套且报成功，
+    # 事后搬回一旦失败，提示里的备份路径就不存在了。宁可拒绝安装。
+    if [[ "${AT_MV_T:-0}" -ne 1 && "${AT_PERL:-0}" -ne 1 ]]; then
+        echo "   no atomic no-replace rename on this system (GNU mv -T or perl is required);" >&2
+        echo "   refusing to install rather than risk moving this copy inside an existing one." >&2
         return 1
     fi
 
@@ -211,9 +257,25 @@ install_skill() {
             backup="$(move_aside "$dest")" || { rm -rf -- "$staging"; return 1; }
         fi
 
-        if ! mv -- "$staging" "$dest"; then
-            echo "   publish failed; restoring the previous installation." >&2
+        # 旧安装移走之后、发布之前，目标可能被别的进程重新建出来。
+        # 这里先查一次只为给出更准的提示；真正的保证在 rename_noreplace：
+        # 目标被占就换名失败，暂存不会被塞进目标内部。
+        if [[ -e "$dest" || -L "$dest" ]]; then
+            echo "   publish failed; the destination exists again." >&2
             rm -rf -- "$staging"
+            AT_DEST="$dest"; AT_BACKUP="$backup"; restore_backup
+            return 1
+        fi
+        if ! rename_noreplace "$staging" "$dest"; then
+            echo "   publish failed; the destination was claimed by another process." >&2
+            rm -rf -- "$staging"
+            AT_DEST="$dest"; AT_BACKUP="$backup"; restore_backup
+            return 1
+        fi
+        # 换名成功即证明落进 dest 的就是本次暂存（目标当时不存在或是空目录），
+        # 不会再出现「目标里是别人的 SKILL.md、本次暂存被嵌套进去」的假成功。
+        if [[ ! -f "$dest/SKILL.md" ]]; then
+            echo "   publish failed; the published copy is incomplete." >&2
             AT_DEST="$dest"; AT_BACKUP="$backup"; restore_backup
             return 1
         fi

@@ -116,8 +116,15 @@ def cn_num(n: int, standalone: bool = True) -> str:
 
 
 def _round_half_up(val: float) -> int:
-    """四舍五入。不用内置 round()：它是银行家舍入，82.5 会变成 82。"""
-    return int(Decimal(str(val)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    """四舍五入。不用内置 round()：它是银行家舍入，82.5 会变成 82。
+
+    用 to_integral_value 而不是 quantize：quantize 受 Decimal 默认精度（28 位）
+    限制，1e30 这种有限但很大的数会抛 InvalidOperation，一路炸成 traceback。
+    """
+    try:
+        return int(Decimal(str(val)).to_integral_value(rounding=ROUND_HALF_UP))
+    except (ArithmeticError, ValueError) as exc:
+        raise ValueError(f"数值 {val} 无法取整（{exc.__class__.__name__}）") from None
 
 
 def _drop_zero_fraction(text: str) -> str:
@@ -138,10 +145,14 @@ def _fmt(val, filters):
     `{x|comma}` 遇到小数曾经悄悄取整、`{x|round|cnwan}` 曾经把中文那一步吞掉，
     都是读者看不出数字被动过的那类错——宁可停下，也不猜作者想要哪一种。
     """
-    if isinstance(val, bool) or val is None:
-        return html.escape("" if val is None else str(val).lower())
-
+    if val is None:
+        return ""
     names = list(filters)
+    if isinstance(val, bool):
+        # 布尔值原样显示 true/false，但它不是数字，不能被 round/comma 处理
+        if names:
+            raise ValueError("布尔值不能用数字过滤器")
+        return html.escape(str(val).lower())
     if not names:
         return html.escape(_plain(val))
     if not isinstance(val, (int, float)):

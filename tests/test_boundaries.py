@@ -163,6 +163,21 @@ class Boundaries(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("{volume.msgs|COMMA}", (self.wd / "report.html").read_text(encoding="utf-8"))
 
+    def test_big_float_and_bool_never_reach_a_traceback(self):
+        # 1e30 是合法有限值，取整不能抛 InvalidOperation；布尔能直接显示，
+        # 但不能套数字过滤器（否则 true 会被当成数字那一路静默放过）
+        facts = copy.deepcopy(self.facts)
+        facts["volume"]["avg_chars"] = 1e30
+        result = self.run_render(facts=facts, narrative={"essay": ["{volume.avg_chars|round}"]})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn(str(10 ** 30), (self.wd / "report.html").read_text(encoding="utf-8"))
+        facts = copy.deepcopy(self.facts)
+        facts["words"]["longest"]["truncated"] = True
+        ok = self.run_render(facts=facts, narrative={"essay": ["{words.longest.truncated}"]})
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        self.assert_rejected(self.run_render(facts=facts, narrative={"essay": ["{words.longest.truncated|round}"]}))
+
     def test_unsupported_filter_combinations_name_path_filters_and_reason(self):
         # 不合规的过滤器组合必须报错，而且要能照着改：路径、用了哪个过滤器、为什么不行
         facts = copy.deepcopy(self.facts)

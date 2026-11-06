@@ -11,6 +11,8 @@ OPS="$(mktemp)"
 FAIL_AT=""
 note() { printf '%s\n' "$1" >> "$OPS"; }
 current_log() { tr '\n' ',' < "$OPS" | sed 's/,$//'; }
+# FAIL_AT 用逗号分隔的精确名匹配：claim-publish 这种名字不能被当成 publish。
+has_fail() { [[ ",$FAIL_AT," == *",$1,"* ]]; }
 
 mv() {
     local src="${*: -2:1}" dst="${*: -1}" step="other"
@@ -22,8 +24,14 @@ mv() {
         step=rollback
     fi
     note "$step"
-    if [[ "$step" != other && "$FAIL_AT" == *"$step"* ]]; then
+    if [[ "$step" != other ]] && has_fail "$step"; then
         return 1
+    fi
+    # 模拟「检查通过之后、换名之前」另一个进程占住目标：目标里已经有它自己
+    # 的 SKILL.md，所以「目标里有 SKILL.md」不能当作发布成功的证据。
+    if [[ "$step" != other ]] && has_fail "claim-$step"; then
+        command mkdir -p "$dst"
+        printf 'foreign\n' > "$dst/SKILL.md"
     fi
     command mv "$@"
 }
@@ -60,7 +68,10 @@ tar() {
     if [[ " $* " == *" -cf "* ]]; then
         note copy
         if [[ "$FAIL_AT" == *copy* ]]; then return 1; fi
+        return 0
     fi
+    # 解包这一步跑在暂存目录里：造一个标记文件，模拟真实拷贝的产物
+    printf 'staged\n' > SKILL.md
     return 0
 }
 
@@ -188,6 +199,44 @@ expect_log 'aside,link,cleanup'
 LINK=0
 echo 'PASS: link installation backs up the old copy and cleans up'
 
+# 旧安装移走之后、换名之前目标被别人占住，且目标里有它自己的 SKILL.md：
+# 换名必须失败，暂存不能被塞进目标里面，旧备份也不能被删。
+reset_fixture
+start_case 'claim-publish'
+if install_skill "$SKILLS" > /dev/null 2>&1; then
+    echo 'a re-created destination did not fail' >&2; exit 1
+fi
+expect_log 'copy,aside,publish,drop-staging'
+if [[ -z "$(find "$SKILLS" -maxdepth 1 -name '.old-existing-*' -print -quit)" ]]; then
+    echo 'the backup was lost when the destination reappeared' >&2; exit 1
+fi
+if [[ "$(cat "$SKILLS/existing/SKILL.md" 2>/dev/null)" != foreign ]]; then
+    echo 'the foreign destination was modified' >&2; exit 1
+fi
+if [[ -n "$(find "$SKILLS/existing" -maxdepth 1 -name '.new-*' -print -quit 2>/dev/null)" ]]; then
+    echo 'the staged directory was nested inside the foreign destination' >&2; exit 1
+fi
+echo 'PASS: a destination claimed just before the rename is refused, backup kept'
+
+# 回滚同理：检查目标不存在之后、换名之前目标重现，备份不能被塞进目标里面，
+# 也不能在失败的情况下宣称「old installation restored」。
+reset_fixture
+start_case 'publish,claim-rollback'
+if install_skill "$SKILLS" > /dev/null 2>&1; then
+    echo 'a re-created destination during rollback did not fail' >&2; exit 1
+fi
+expect_log 'copy,aside,publish,drop-staging,rollback'
+if [[ -z "$(find "$SKILLS" -maxdepth 1 -name '.old-existing-*' -print -quit)" ]]; then
+    echo 'the backup was lost when the destination reappeared during rollback' >&2; exit 1
+fi
+if [[ "$(cat "$SKILLS/existing/SKILL.md" 2>/dev/null)" != foreign ]]; then
+    echo 'the foreign destination was modified during rollback' >&2; exit 1
+fi
+if [[ -n "$(find "$SKILLS/existing" -maxdepth 1 -name '.old-*' -print -quit 2>/dev/null)" ]]; then
+    echo 'the backup was nested inside the foreign destination' >&2; exit 1
+fi
+echo 'PASS: a destination claimed just before the rollback rename keeps the backup'
+
 # 链接失败后转拷贝，如果连暂存目录都建不出来，旧安装必须换回来
 reset_fixture
 LINK=1
@@ -199,3 +248,16 @@ expect_log 'aside,link,mkdir-staging,rollback'
 [[ -f "$SKILLS/existing/keep.txt" ]] || { echo 'a failed staging mkdir lost the old install' >&2; exit 1; }
 LINK=0
 echo 'PASS: failed staging setup restores the previous installation'
+
+# 没有可靠换名原语（既无 GNU mv -T 也无 perl）：直接拒绝安装，一个文件都不动
+reset_fixture
+saved_mv_t="$AT_MV_T"; saved_perl="$AT_PERL"
+AT_MV_T=0; AT_PERL=0
+start_case
+if install_skill "$SKILLS" > /dev/null 2>&1; then
+    echo 'an install without a no-replace rename was attempted' >&2; exit 1
+fi
+[[ -z "$(current_log)" ]] || { echo 'the refusal path touched the fixture' >&2; exit 1; }
+[[ -f "$SKILLS/existing/keep.txt" ]] || { echo 'the refusal path lost the old install' >&2; exit 1; }
+AT_MV_T="$saved_mv_t"; AT_PERL="$saved_perl"
+echo 'PASS: no rename primitive refuses the install instead of moving anything'

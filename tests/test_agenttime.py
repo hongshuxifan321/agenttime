@@ -114,6 +114,9 @@ check_true("小数不能直接用中文万数", fmt_raises(82.5, ["cnwan"]))
 check_true("小数不能直接用中文万数别名", fmt_raises(82.5, ["cn"]))
 check_true("千分位和中文万数不能同时用", fmt_raises(82.5, ["comma", "cnwan"]))
 check_true("数字过滤器不能用在文字上", fmt_raises("abc", ["comma"]))
+check_true("布尔值不能用数字过滤器", fmt_raises(True, ["round"]))
+check("布尔值本身照旧显示", render._fmt(True, []), "true")
+check("超大有限浮点取整不炸", render._fmt(1e30, ["round"]), str(10 ** 30))
 check("先 round 再转中文", render._fmt(82.5, ["round", "cnwan"]), "八十三")
 check("先 round 再加千分位", render._fmt(1234567.5, ["round", "comma"]), "1,234,568")
 check("中文万数用于整数照旧", render._fmt(40000, ["cnwan"]), "四万")
@@ -199,6 +202,11 @@ f = engine.build_facts([Session("span", "span", "dsh", msgs=span_msgs)])
 check("月份在统计层产生", f["span"]["months"], 2)
 check("封面从 facts 取月份", "这 2 个月" in render._headline(f), True)
 check("日期在统计层格式化", f["span"]["first_day"], "2026.01.01")
+# 75 / 30 = 2.5：文档写的是四舍五入，内置 round() 会给 2（银行家舍入）
+half = [Message("a", T0), Message("b", T0 + timedelta(days=75))]
+f = engine.build_facts([Session("half", "half", "dsh", msgs=half)])
+check("恰好半个月的跨度进位", f["span"]["months"], 3)
+check("封面跟着进位", "这 3 个月" in render._headline(f), True)
 
 # ─────────────────────────── 读 DSH 会话 ───────────────────────────
 try:

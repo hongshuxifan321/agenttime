@@ -106,6 +106,14 @@ function Resolve-InstallPath {
     return $full.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
 }
 
+function Move-Dir {
+    # 目录换名。目标已存在时 Directory.Move 会拒绝——换成 Move-Item 的话，
+    # 目标若在检查之后被别人重新建出来，源目录会被挪进目标里面，装完看着
+    # 像成功，实际数据在 $dest\.new-xxx 里。
+    param([string]$From, [string]$To)
+    [IO.Directory]::Move($From, $To)
+}
+
 function Move-Side {
     # Move an existing install out of the way under a hidden sibling name.
     # Returns the new path; throws if the move fails.
@@ -113,7 +121,7 @@ function Move-Side {
     $parent = Split-Path -Parent $Path
     $base = Split-Path -Leaf $Path
     $candidate = Join-Path $parent ('.old-' + $base + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-    Move-Item -LiteralPath $Path -Destination $candidate
+    Move-Dir -From $Path -To $candidate
     return $candidate
 }
 
@@ -188,7 +196,7 @@ function Install-Skill {
             }
 
             if (-not $backup -and (Test-Path -LiteralPath $dest)) { $backup = Move-Side -Path $dest }
-            Move-Item -LiteralPath $staging -Destination $dest
+            Move-Dir -From $staging -To $dest
             $staging = $null
             $published = $true
             Write-Host '   copied.'
@@ -198,13 +206,10 @@ function Install-Skill {
             Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
         }
         if ($backup) {
-            # 发布没成功：把旧安装换回来。换不回来就保留备份并报出位置，
-            # 让用户自己搬——删掉备份才是真的丢了。
-            if ((Test-Path -LiteralPath $dest) -and -not $published) {
-                Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue
-            }
+            # 发布没成功：把旧安装换回来。目标若已被别的进程占用，Move-Dir 会拒绝，
+            # 备份原样保留并报出路径——不能为了「恢复」再去删别人的目录。
             try {
-                Move-Item -LiteralPath $backup -Destination $dest
+                Move-Dir -From $backup -To $dest
                 $backup = $null
                 Write-Host '   old installation restored.'
             } catch {
