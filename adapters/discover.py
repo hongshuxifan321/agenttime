@@ -137,8 +137,19 @@ _KNOWN = (
 _MAX_LIST = 4000
 
 
-def _top(path: str, home: str) -> str:
-    rel = os.path.relpath(path, home)
+def top_dir(path: str, home: str = HOME) -> str:
+    """把数据源路径折算到主目录下的第一层，用来排除已适配的源。
+
+    数据源不在主目录下时拿不到相对路径：Windows 上跨盘 relpath 直接抛
+    ValueError（实测 D: 盘报 "path is on mount 'D:'"），原来那两份拷贝都
+    没接住。这种路径本来也不会被主目录扫描命中，原样返回即可。
+    """
+    try:
+        rel = os.path.relpath(path, home)
+    except ValueError:
+        return os.path.abspath(path)
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return os.path.abspath(path)
     return os.path.join(home, rel.split(os.sep)[0])
 
 
@@ -168,7 +179,7 @@ def known(home: str = HOME, exclude=()) -> list[dict]:
         path = os.path.join(home, *rel.split("/"))
         if not os.path.exists(path):
             continue
-        if os.path.abspath(_top(path, home)) in exclude_top:
+        if os.path.abspath(top_dir(path, home)) in exclude_top:
             continue
         files = _walk_files(path)
         if not files:

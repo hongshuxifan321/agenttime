@@ -48,6 +48,14 @@ cd agenttime
 .\install.ps1
 ```
 
+Windows PowerShell 5.1 和 PowerShell 7 都可以运行安装器。如果提示“禁止运行脚本”（`running scripts is disabled`），在仓库目录改用：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+这只为本次安装进程设置执行策略，不修改用户或系统的长期设置。下方的 `-Target` 等参数也可接在命令末尾。
+
 ```bash
 git clone https://github.com/hongshuxifan321/agenttime
 cd agenttime
@@ -85,11 +93,12 @@ python cli.py doctor                       # 看这台机器上能读到什么
 python cli.py scan --out facts.json        # 统计
 # 写 narrative.json（照 narrative.example.json 的结构）
 python cli.py render facts.json narrative.json
+python tests/test_agenttime.py             # 回归测试
 ```
 
 默认输出 `~/Desktop/agenttime_report_YYYYMMDD_HHMMSS.html`。文件名带时分秒——同一天跑几次、几个 agent 各出一份，都不会互相覆盖。桌面写不进去时回退到当前目录并打印真实路径，回退之后同样不覆盖已有文件。
 
-用 `--out` 指定路径时可以覆盖，那是你自己起的名字。
+用 `--out` 指定路径时可以覆盖该报告，但不允许覆盖 facts、narrative 或模板输入文件。指定路径写入失败就停止，不回退覆盖其他文件。所有输出先完整写入临时文件，再原子落盘；默认文件名在并发运行时也不会互相覆盖。
 
 中间文件建议放当前目录的 `.agenttime/`，不要用 `$env:TEMP`：在 DSH 沙箱里，会话的 TEMP 是 `Temp\dsh-xxxx`，提权进程的是 `Temp`，中途提权会找不到文件。
 
@@ -101,7 +110,7 @@ python cli.py render facts.json narrative.json
 | 叙事 | AI 写，唯一需要动脑的一层 | `narrative.json` |
 | 渲染 | `render.py` + `template.html` | 单个 HTML |
 
-`narrative.json` 里不写数字，只写 `{volume.msgs|comma}` 这样的占位符，渲染时从 `facts.json` 取值。所以文案里的每个数字都和数据一致，AI 编不出来。
+`narrative.json` 里不写数字，只写 `{volume.msgs|comma}` 这样的占位符，渲染时从 `facts.json` 取值。渲染器拦截手写阿拉伯数字和常见中文数量表达；叙事中的数量断言仍需核对事实。缺失字段时停止生成，不估算、不补零。封面、日期、列表与 chrome 同样通过占位符取值；旧 facts 缺字段时先重跑 scan。
 
 报告语种跟数据一致。模板里那几句固定文案默认中文，英文对话可以在 `narrative.json` 的 `chrome` 里覆盖掉，细节见 `SKILL.md`。
 
@@ -118,6 +127,7 @@ python cli.py render facts.json narrative.json
 | `template.html` | 版式：封面 / 卡片流 / 转场 / 散文 / 页脚 |
 | `narrative.example.json` | 叙事示例（虚构数据，只用来看结构） |
 | `install.ps1` / `install.sh` | 安装脚本 |
+| `tests/` | 回归测试，只依赖标准库 |
 
 ## 数据源：先支持 DSH，其余交给主动发现
 
@@ -172,11 +182,13 @@ def load(root: str) -> tuple[list[Session], LoadReport]:
 
 然后在 `adapters/__init__.py` 的 `REGISTRY` 加一行。统计和渲染都不用动。
 
+如果要兼容 Python 3.9，新文件开头加一行 `from __future__ import annotations`——上面那种 `str | None`、`tuple[...]` 的写法在 3.9 上要靠它。
+
 难点全在 `load()` 的注入过滤。DSH 有 `source.kind == "user"` 这种干净字段，别的 agent 往往没有，得靠 `isMeta`、`synthetic`、XML 标签之类的特征自己判断。判断不干净的话，报告里的高频词会全是系统提示——这是这个项目最容易做错的地方。
 
 ## 数据口径
 
-- 只统计真人输入。DSH 会把运行时上下文、`AGENTS.md`、技能目录都写成 `user/message` 事件，必须按 `data.source.kind == "user"` 剔除。实测在一条 2,608 条 `user/message` 的日志里，只有 1,360 条是真人输入，注入文本是真实输入的 92 倍
+- 只统计真人输入。DSH 会把运行时上下文、`AGENTS.md`、技能目录都写成 `user/message` 事件，必须按 `data.source.kind == "user"` 剔除。注入的事件条数其实不多，但每条都很长：本机实测 1,288 条注入事件共 1,100 万字符，真人输入是 12.9 万字符，相差约 85 倍。漏掉这层过滤，高频词卡会全是系统提示
 - 时间戳只取真人消息，不混入工具调用和会话标题事件
 - 「思考量」取 reasoning 块的文本长度，不是块数
 - 「一次坐下」按消息间隔 90 分钟切分，不用会话首末时间——会话可以隔几天恢复，用首末时间会算出 453 小时这种数

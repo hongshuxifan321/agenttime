@@ -16,14 +16,40 @@ import os
 import re
 import sys
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
+
+from fileio import atomic_write_text
+from validation import check_facts, check_values
 
 # 容忍花括号和竖线两侧的空格：{volume.msgs | comma} 和 { volume.msgs } 都认。
 # 不写死成紧凑形式，是因为这类空格一旦漏掉，占位符会原样出现在报告里，
 # 而且不会进 MISSING——静默出错最难查。
-PLACE = re.compile(r"\{\s*([A-Za-z_][\w.\-]*)\s*((?:\|\s*[a-z]+\s*)*)\}")
+PLACE = re.compile(r"\{\s*([A-Za-z_][\w.\-]*)\s*((?:\|\s*[A-Za-z]+\s*)*)\}")
 
-# 渲染完之后仍像占位符的片段，用来兜底报警
-LEFTOVER = re.compile(r"\{[^{}\n]{1,60}\}")
+# 渲染完之后仍像占位符的片段，用来兜底报警。只认「像 facts 路径」的写法——
+# 散文里正常出现的 {x: int}、{a+b} 不该被报成残留占位符。
+LEFTOVER = re.compile(r"\{\s*[A-Za-z_][\w.\-]*(?:\s*\|\s*[a-z]+)*\s*\}")
+
+FILTERS = {"comma", "round", "cn", "cnwan"}
+CANDIDATE = re.compile(r"\{\s*[A-Za-z_][\w.\-]*(?:\s*\|[^{}]*)?\s*\}")
+
+
+def _placeholder_problem(text):
+    for match in re.finditer(r"\{[^{}\n]*\}", text):
+        parsed = PLACE.fullmatch(match.group())
+        if parsed is None:
+            if CANDIDATE.fullmatch(match.group()) or re.match(r"\{\s*[A-Za-z_]\w*\s*[.\[|]", match.group()):
+                return "占位符格式不对，请使用 {facts.路径|过滤器}"
+            continue  # 正常散文里的 {x: int}、{a+b} 不是占位符。
+        filters = [part.strip() for part in parsed.group(2).split("|") if part.strip()]
+        if any(part not in FILTERS for part in filters):
+            return "占位符使用了不支持的过滤器（可用 comma、round、cn、cnwan）"
+    return ""
+
+
+# 模板里必须先存在的槽位。拼接靠 str.replace，标记不在就等于内容被安静丢掉。
+MARKERS = ("<!-- LANG -->", "<!-- TITLE -->", "<!-- HEADLINE -->", "<!-- RANGE -->",
+           "<!-- TURN -->", "<!-- CARDS -->", "<!-- ESSAY -->", "<!-- FOOTER -->")
 
 
 def get_path(data, path):
@@ -32,6 +58,9 @@ def get_path(data, path):
         if isinstance(cur, dict):
             cur = cur.get(key, "")
         elif isinstance(cur, (list, tuple)):
+            if key.startswith("-"):
+                # 负下标会安静地取到末尾，笔误写成 -1 看起来像正常取值
+                return ""
             try:
                 cur = cur[int(key)]
             except (ValueError, IndexError):
@@ -86,34 +115,64 @@ def cn_num(n: int, standalone: bool = True) -> str:
     return s + ("零" + cn_num(r, False) if r < 10000000 else cn_num(r, False))
 
 
+def _round_half_up(val: float) -> int:
+    """四舍五入。不用内置 round()：它是银行家舍入，82.5 会变成 82。"""
+    return int(Decimal(str(val)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _drop_zero_fraction(text: str) -> str:
+    """40.0 显示成 40；其余小数原样保留，不补也不截位。"""
+    return text[:-2] if text.endswith(".0") else text
+
+
+def _plain(val) -> str:
+    """不加过滤器时的文字：整数照写，小数保留原值，只去掉纯整数的 .0。"""
+    if isinstance(val, float):
+        return _drop_zero_fraction(f"{val}")
+    return str(val)
+
+
 def _fmt(val, filters):
+    """按过滤器把值变成文字。类型或组合不合规就报错，不静默忽略。
+
+    `{x|comma}` 遇到小数曾经悄悄取整、`{x|round|cnwan}` 曾经把中文那一步吞掉，
+    都是读者看不出数字被动过的那类错——宁可停下，也不猜作者想要哪一种。
+    """
     if isinstance(val, bool) or val is None:
-        s = "" if val is None else str(val).lower()
-    elif isinstance(val, int):
-        if "cnwan" in filters or "cn" in filters:
-            # 交给 cn_num 自己分段：它认得亿，外层再 //10000 会把亿说成万
-            s = cn_num(val)
-        elif "comma" in filters:
-            s = f"{val:,}"
-        else:
-            s = str(val)
-    elif isinstance(val, float):
-        if "round" in filters:
-            s = str(round(val))
-        elif "comma" in filters:
-            s = f"{round(val):,}"
-        else:
-            s = f"{val:.1f}".rstrip("0").rstrip(".")
-    else:
-        s = str(val)
-    return html.escape(s)
+        return html.escape("" if val is None else str(val).lower())
+
+    names = list(filters)
+    if not names:
+        return html.escape(_plain(val))
+    if not isinstance(val, (int, float)):
+        raise ValueError(f"数字过滤器不能用在 {type(val).__name__} 上")
+
+    wants_cn = "cn" in names or "cnwan" in names
+    if wants_cn and "comma" in names:
+        raise ValueError("千分位和中文万数不能同时用，只能选一个")
+
+    number = val
+    if "round" in names and isinstance(number, float):
+        number = _round_half_up(number)
+
+    if wants_cn:
+        if not isinstance(number, int):
+            raise ValueError(f"中文万数只能用于整数，当前是 {number}，先加 |round")
+        return html.escape(cn_num(number))
+    if "comma" in names:
+        # 千分位只加分隔符，不改数值：82.5 → 82.5，1234.5 → 1,234.5
+        return html.escape(_drop_zero_fraction(f"{number:,}"))
+    return html.escape(_plain(number))
 
 
 MISSING = set()
 
 
-def subst(tpl, facts):
+def subst(tpl, facts, allow_b=True, allow_br=False):
     """把 {path} / {path|comma} / {path|round} / {path|cnwan} 换成 facts 里的值。"""
+    problem = _placeholder_problem(tpl)
+    if problem:
+        raise ValueError(problem)
     def repl(m):
         path = m.group(1)
         val = get_path(facts, path)
@@ -122,13 +181,124 @@ def subst(tpl, facts):
             MISSING.add(path)
             return ""
         filters = [f.strip() for f in (m.group(2) or "").split("|") if f.strip()]
-        return _fmt(val, filters)
-    return PLACE.sub(repl, tpl)
+        if isinstance(val, (dict, list, tuple)):
+            raise ValueError(f"{path} 应该指向文字或数值，不能是对象或数组")
+        try:
+            return _fmt(val, filters)
+        except ValueError as exc:
+            # 报错要能照着改：路径、用了哪些过滤器、为什么不行，一句里说清
+            raise ValueError(f"{path}（{'|'.join(filters)}）：{exc}") from None
+    # 先转义文字片段，再插入已经转义的 facts；绝不把 facts 里的标签恢复成 HTML。
+    parts, pos = [], 0
+    for match in PLACE.finditer(tpl):
+        parts.append(_esc(tpl[pos:match.start()], allow_br=allow_br, allow_b=allow_b))
+        parts.append(repl(match))
+        pos = match.end()
+    parts.append(_esc(tpl[pos:], allow_br=allow_br, allow_b=allow_b))
+    return "".join(parts)
+
+
+def _esc(value, allow_br: bool = False, allow_b: bool = False) -> str:
+    """仅恢复无属性的排版标签；其余标签和属性全部作为文字显示。"""
+    text = html.escape(str(value), quote=True)
+    if allow_br:
+        text = text.replace("&lt;br&gt;", "<br>")
+    if allow_b:
+        text = text.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")
+    return text
+
+
+# idx 是版式编号，不是统计值。文字中的数值必须改用 facts 占位符。
+# 中文只检查明确数量表达，避免把「一些」「一起」等普通词误当成统计。
+LITERAL_NUMBER = re.compile(
+    r"\d|[零〇一二三四五六七八九两]*[十百千万亿][零〇一二三四五六七八九十百千万亿两]*"
+    r"(?=个|次|句|场|天|年|月|周|小时|分钟|秒|字|倍|点|$)"
+    r"|[零〇三四五六七八九]+(?=个|次|句|场|天|年|月|周|小时|分钟|秒|字|倍|点)")
+
+
+def _text_problem(value, label):
+    if not isinstance(value, str):
+        return f"{label} 应该是字符串"
+    problem = _placeholder_problem(value)
+    if problem:
+        return f"{label}：{problem}"
+    literal = html.unescape(PLACE.sub("", value))
+    literal = re.sub(r"</?b>|<br>", "", literal)
+    if LITERAL_NUMBER.search(literal):
+        return f"{label} 含有手写数字，请改用 facts 占位符"
+    return ""
+
+
+def _check_narrative(narrative: dict) -> str:
+    """把叙事里的类型错误挡在这里，返回一句能照着改的说明。
+
+    不挡的话：`cards` 写成字符串会逐字符生成卡片，`essay` 写成字符串会
+    一字一段，两个都是 rc=0 的静默错报告，比报错难查得多。
+    """
+    problem = check_values(narrative)
+    if problem:
+        return problem
+    cards = narrative.get("cards")
+    essay = narrative.get("essay")
+    chrome = narrative.get("chrome")
+    if cards is None and essay is None:
+        return "既没有 cards 也没有 essay"
+    if cards is not None:
+        if not isinstance(cards, list):
+            return f"cards 应该是数组，现在是 {type(cards).__name__}"
+        indices = set()
+        for i, card in enumerate(cards, 1):
+            if not isinstance(card, dict):
+                return f"cards 第 {i} 项应该是对象，现在是 {type(card).__name__}"
+            for key in ("idx", "kicker"):
+                if key not in card:
+                    return f"cards 第 {i} 项缺少 {key}"
+            if not isinstance(card["idx"], str) or not re.fullmatch(r"[0-9]{1,3}", card["idx"]):
+                return f"cards 第 {i} 项的 idx 应该是卡片编号"
+            if card["idx"] in indices:
+                return f"cards 第 {i} 项的 idx 重复"
+            indices.add(card["idx"])
+            if not isinstance(card["kicker"], str) or not card["kicker"].strip():
+                return f"cards 第 {i} 项的 kicker 不能为空"
+            if not any(isinstance(card.get(key), str) and card[key].strip() for key in ("fact", "aside")):
+                return f"cards 第 {i} 项需要非空 fact 或 aside"
+            if "num" in card and "unit" not in card:
+                return f"cards 第 {i} 项缺少 unit"
+            for key in ("kicker", "num", "unit", "fact", "aside"):
+                if key in card:
+                    problem = _text_problem(card[key], f"cards 第 {i} 项的 {key}")
+                    if problem:
+                        return problem
+                    if key == "num" and not PLACE.fullmatch(card[key].strip()):
+                        return f"cards 第 {i} 项的 num 必须是一个 facts 占位符"
+            for key in ("list_from", "chips_from"):
+                if key in card and not isinstance(card[key], str):
+                    return f"cards 第 {i} 项的 {key} 应该是 facts 路径"
+    if essay is not None:
+        if not isinstance(essay, list):
+            return f"essay 应该是数组（一个元素一段），现在是 {type(essay).__name__}"
+        for i, para in enumerate(essay, 1):
+            if not isinstance(para, str):
+                return f"essay 第 {i} 段应该是字符串，现在是 {type(para).__name__}"
+            problem = _text_problem(para, f"essay 第 {i} 段")
+            if problem:
+                return problem
+    if chrome is not None and not isinstance(chrome, dict):
+        return f"chrome 应该是对象，现在是 {type(chrome).__name__}"
+    for key, value in (chrome or {}).items():
+        if key in ("title", "headline", "turn", "footer"):
+            problem = _text_problem(value, f"chrome.{key}")
+            if problem:
+                return problem
+    if not cards and not essay:
+        return "cards 和 essay 都是空的，报告只剩一个封面"
+    return ""
 
 
 def _num_block(num, unit):
     unit = str(unit) if unit else ""
-    unit_html = f'<span class="unit">{html.escape(unit)}</span>' if unit else ""
+    # num 和 unit 都已通过 subst 转义。
+    unit_html = f'<span class="unit">{unit}</span>' if unit else ""
     return f'  <div class="num">{num}{unit_html}</div>'
 
 
@@ -139,24 +309,41 @@ def card_html(card, facts):
              f'  <p class="kicker">{subst(str(card.get("kicker", "")), facts)}</p>']
 
     if "num" in card:
-        parts.append(_num_block(subst(str(card["num"]), facts), card.get("unit", "")))
+        parts.append(_num_block(subst(str(card["num"]), facts),
+                                subst(card.get("unit", ""), facts, allow_b=False)))
 
     if card.get("fact"):
         parts.append(f'  <p class="fact">{subst(card["fact"], facts)}</p>')
 
     if card.get("list_from"):
+        source = get_path(facts, card["list_from"])
+        if not isinstance(source, (list, tuple)) or not source:
+            MISSING.add(card["list_from"])
         rows = []
-        for p in get_path(facts, card["list_from"]) or []:
-            rows.append(
-                f'    <li><span class="t">{html.escape(str(p.get("title", "")))}</span>'
-                f'<span class="m">{p.get("start", "")} · {p.get("n", 0)} 句</span></li>'
-            )
+        for i, p in enumerate(source if isinstance(source, (list, tuple)) else []):
+            if not isinstance(p, dict):
+                raise ValueError(f"{card['list_from']}.{i} 应该是对象")
+            prefix = card["list_from"] + f".{i}"
+            title = subst("{" + prefix + ".title}", facts, allow_b=False)
+            date = subst("{" + prefix + ".start}", facts, allow_b=False)
+            count = subst("{" + prefix + ".n}", facts, allow_b=False)
+            rows.append(f'    <li><span class="t">{title}</span>'
+                        f'<span class="m">{date} · {count} 句</span></li>')
         parts.append('  <ul class="lines">\n' + "\n".join(rows) + "\n  </ul>")
 
     if card.get("chips_from"):
-        raw = get_path(facts, card["chips_from"]) or []
-        words = [w[0] if isinstance(w, (list, tuple)) else str(w) for w in raw][:10]
-        chips = "".join(f"<span>{html.escape(w)}</span>" for w in words)
+        raw = get_path(facts, card["chips_from"])
+        if not isinstance(raw, (list, tuple)):
+            raw = []
+        if not raw:
+            MISSING.add(card["chips_from"])
+        words = []
+        for i, word in enumerate(raw[:10]):
+            path = card["chips_from"] + f".{i}"
+            if isinstance(word, (list, tuple)):
+                path += ".0"
+            words.append(subst("{" + path + "}", facts, allow_b=False))
+        chips = "".join(f"<span>{word}</span>" for word in words)
         parts.append(f'  <div class="chips">{chips}</div>')
 
     if card.get("aside"):
@@ -170,25 +357,22 @@ def _headline(facts) -> str:
     """封面标题。按真实跨度说「这些天 / 这几个月 / 这一年多」，
     不写死个月数——别人可能只用了两周，也可能用了两年。"""
     span = facts.get("span", {}) or {}
-    try:
-        days = int(span.get("total_days") or 0)
-    except (TypeError, ValueError):
-        days = 0
-    months = max(1, round(days / 30))
+    days = span.get("total_days")
+    months = span.get("months")
+    if not isinstance(days, (int, float)) or not isinstance(months, (int, float)):
+        MISSING.add("span.months" if months is None else "span.total_days")
+        return ""
     if days <= 45:
         head = "这些天"
     elif months <= 12:
-        head = f"这 {months} 个月"
+        head = "这 {span.months} 个月"
     else:
         head = "这一年多"
-    return f"{head}的<br>一些记录"
+    return subst(head + "的<br>一些记录", facts, allow_b=False, allow_br=True)
 
 
 def _daterange(facts) -> str:
-    span = facts.get("span", {}) or {}
-    first = str(span.get("first") or "")[:10].replace("-", ".")
-    last = str(span.get("last") or "")[:10].replace("-", ".")
-    return f"{first} — {last}" if first and last else ""
+    return subst("{span.first_day} — {span.last_day}", facts, allow_b=False)
 
 
 _SOURCE_NAMES = {
@@ -208,7 +392,8 @@ def _source_line(facts) -> str:
     src = facts.get("sources") or {}
     if not src:
         return "本机对话记录"
-    parts = [f"{_SOURCE_NAMES.get(name, name)} 的 {n} 个会话"
+    parts = [_esc(_SOURCE_NAMES.get(name, name)) + " 的 "
+             + subst("{sources." + name + "}", facts, allow_b=False) + " 个会话"
              for name, n in sorted(src.items(), key=lambda kv: -kv[1])]
     return "、".join(parts)
 
@@ -225,37 +410,33 @@ def default_out() -> str:
     return os.path.join(desktop if os.path.isdir(desktop) else os.getcwd(), name)
 
 
-def _unique(path: str) -> str:
-    """路径已被占用时加 _2、_3。"""
-    if not os.path.exists(path):
-        return path
-    base, ext = os.path.splitext(path)
-    n = 2
-    while os.path.exists(f"{base}_{n}{ext}"):
-        n += 1
-    return f"{base}_{n}{ext}"
-
-
 def write_out(text: str, path: str, allow_overwrite: bool = True) -> str:
-    """先写请求的路径；桌面不可写（沙箱）时回退到当前目录，并把真实路径返回。
-
-    `allow_overwrite=False` 用于默认文件名：不覆盖任何已有文件，包括回退之后
-    落在当前目录里的那一份。同一个文件名写两次是使用者最不希望看到的事。
-    """
-    if not allow_overwrite:
-        path = _unique(path)
+    """显式路径失败就停止；默认路径可安全回退，始终原子发布。"""
     try:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        return path
-    except OSError as exc:
+        return atomic_write_text(path, text, overwrite=allow_overwrite)
+    except (OSError, UnicodeError, ValueError) as exc:
+        if allow_overwrite:
+            print(f"[error] 无法写入 {path}（{exc.__class__.__name__}），未改写其他路径。")
+            return ""
         fallback = os.path.abspath(os.path.basename(path))
-        if not allow_overwrite:
-            fallback = _unique(fallback)
-        with open(fallback, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        print(f"[warn] 无法写入 {path}（{exc.__class__.__name__}），已改写到 {fallback}")
-        return fallback
+        try:
+            final = atomic_write_text(fallback, text, overwrite=False)
+        except (OSError, UnicodeError, ValueError) as exc2:
+            print(f"[error] {path} 写不进去（{exc.__class__.__name__}），"
+                  f"回退到 {fallback} 也失败（{exc2.__class__.__name__}）。")
+            print("换一个 --out 目录再试。")
+            return ""
+        print(f"[warn] 无法写入 {path}（{exc.__class__.__name__}），已改写到 {final}")
+        return final
+
+
+def _same_path(a, b):
+    try:
+        if os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b)):
+            return True
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return False
 
 
 def main(argv: list[str]) -> int:
@@ -268,7 +449,10 @@ def main(argv: list[str]) -> int:
     args = []
     i = 1
     while i < len(argv):
-        if argv[i] == "--out" and i + 1 < len(argv):
+        if argv[i] == "--out":
+            if i + 1 >= len(argv):
+                print("--out 后面要跟一个路径。")
+                return 1
             out_path = argv[i + 1]
             i += 2
         else:
@@ -287,8 +471,13 @@ def main(argv: list[str]) -> int:
         print(f"找不到 facts 文件：{facts_path}")
         print("先跑 `python cli.py scan --out facts.json`。")
         return 1
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
         print(f"读不了 {facts_path}：{exc}")
+        return 1
+
+    if not isinstance(facts, dict):
+        print(f"{facts_path} 的顶层应该是一个对象，现在是 {type(facts).__name__}。")
+        print("它应该是 `python cli.py scan --out facts.json` 的输出。")
         return 1
 
     try:
@@ -298,7 +487,7 @@ def main(argv: list[str]) -> int:
         print(f"找不到叙事文件：{nar_path}")
         print("照 narrative.example.json 的样子写一份。")
         return 1
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
         print(f"读不了 {nar_path}：{exc}")
         return 1
 
@@ -309,53 +498,80 @@ def main(argv: list[str]) -> int:
     try:
         with open(tpl_path, encoding="utf-8") as fh:
             tpl = fh.read()
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         print(f"读不了模板 {tpl_path}：{exc}")
         return 1
 
-    if "cards" not in narrative and "essay" not in narrative:
-        print("narrative.json 结构不对：既没有 cards 也没有 essay。")
-        print("照 narrative.example.json 的样子写，至少要有其中一个。")
+    absent = [m for m in MARKERS if m not in tpl]
+    if absent:
+        print(f"模板 {tpl_path} 缺这些标记：{'、'.join(absent)}")
+        print("缺了的话对应内容会被直接丢掉，所以先停下来。")
         return 1
 
-    cards_src = narrative.get("cards") or []
-    essay_src = narrative.get("essay") or []
-    cards = "\n\n".join(card_html(c, facts) for c in cards_src)
-    essay = "\n".join(f"<p>{subst(p, facts)}</p>" for p in essay_src)
+    problem = check_facts(facts)
+    if problem:
+        print(f"{facts_path} 数据不对：{problem}。")
+        return 1
+    if out_path and any(_same_path(out_path, path) for path in (facts_path, nar_path, tpl_path)):
+        print("[error] --out 不能覆盖 facts、narrative 或模板输入文件。")
+        return 1
+    problem = _check_narrative(narrative)
+    if problem:
+        print(f"{nar_path} 结构不对：{problem}。")
+        print("照 narrative.example.json 的样子写：一个元素一段，卡片是对象。")
+        return 1
 
-    # 模板里那几句固定文案（标题、转场、页脚）默认是中文。报告的语种要跟数据一致，
-    # 英文数据就由 narrative.chrome 覆盖掉；不写 chrome 就保持中文默认。
-    chrome = narrative.get("chrome") or {}
-    lang = chrome.get("lang") or "zh-CN"
-    headline = chrome.get("headline") or _headline(facts)
-    title = chrome.get("title") or headline.replace("<br>", " ")
-    turn = chrome.get("turn") or "翻到这里，剩下的不是数字了"
-    footer = chrome.get("footer") or (
-        f"数据来自 {_source_line(facts)}，全部在本地读取。"
-        "系统注入的上下文、指令与技能目录不计入。")
+    try:
+        cards_src = narrative.get("cards") or []
+        essay_src = narrative.get("essay") or []
+        cards = "\n\n".join(card_html(c, facts) for c in cards_src)
+        essay = "\n".join(f"<p>{subst(p, facts)}</p>" for p in essay_src)
 
-    page = (tpl.replace("<!-- LANG -->", lang)
-               .replace("<!-- TITLE -->", title)
-               .replace("<!-- HEADLINE -->", headline)
-               .replace("<!-- RANGE -->", _daterange(facts))
-               .replace("<!-- TURN -->", turn)
-               .replace("<!-- FOOTER -->", footer)
-               .replace("<!-- CARDS -->", cards)
-               .replace("<!-- ESSAY -->", essay))
+        # 模板里那几句固定文案（标题、转场、页脚）默认是中文。报告的语种要跟数据一致，
+        # 英文数据就由 narrative.chrome 覆盖掉；不写 chrome 就保持中文默认。
+        chrome = narrative.get("chrome") or {}
+        lang = _esc(chrome.get("lang") or "zh-CN")
+        if chrome.get("headline"):
+            headline = subst(chrome["headline"], facts, allow_b=False, allow_br=True)
+        else:
+            headline = _headline(facts)
+        # 标题里不能留 <br>，也不该留下它换来的那个空格
+        title = subst(chrome["title"], facts, allow_b=False) if chrome.get("title") else headline.replace("<br>", "")
+        turn = subst(chrome.get("turn") or "翻到这里，剩下的不是数字了", facts, allow_b=False)
+        if chrome.get("footer"):
+            footer = subst(chrome["footer"], facts, allow_b=False)
+        else:
+            footer = (f"数据来自 {_source_line(facts)}，全部在本地读取。"
+                      "系统注入的上下文、指令与技能目录不计入。")
+
+        page = (tpl.replace("<!-- LANG -->", lang)
+                   .replace("<!-- TITLE -->", title)
+                   .replace("<!-- HEADLINE -->", headline)
+                   .replace("<!-- RANGE -->", _daterange(facts))
+                   .replace("<!-- TURN -->", turn)
+                   .replace("<!-- FOOTER -->", footer)
+                   .replace("<!-- CARDS -->", cards)
+                   .replace("<!-- ESSAY -->", essay))
+    except (ValueError, TypeError, OverflowError) as exc:
+        print(f"[error] 无法渲染：{exc}")
+        return 1
     if MISSING:
-        print("[warn] 这些占位符在 facts.json 里找不到，已渲染为空："
+        print("[error] 这些占位符在 facts.json 里找不到，未生成报告："
               + "、".join(sorted(MISSING)))
+        return 1
     # 没能替换的占位符会原样留在报告里。MISSING 抓不到这种（根本没匹配上），
     # 所以渲染完再扫一遍正文，宁可多报一句也别让 {xxx} 出现在读者眼前。
     leftover = sorted(set(LEFTOVER.findall(
-        "\n".join([cards, essay, headline, turn, footer]))))
+        "\n".join([cards, essay, title, headline, turn, footer]))))
     if leftover:
         print("[warn] 这些看着像占位符但没替换成功（检查花括号和拼写）："
               + "、".join(leftover[:8]) + ("…" if len(leftover) > 8 else ""))
     # 用户明确指定 --out 时可以覆盖；用默认文件名时一份都不覆盖
     final = write_out(page, out_path or default_out(),
                       allow_overwrite=bool(out_path))
-    print(f"写入 {final}（{len(page):,} 字节，{len(cards_src)} 张卡）")
+    if not final:
+        return 1
+    print(f"写入 {final}（{len(page):,} 字符，{len(cards_src)} 张卡）")
     return 0
 
 

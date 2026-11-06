@@ -48,6 +48,14 @@ cd agenttime
 .\install.ps1
 ```
 
+The installer supports Windows PowerShell 5.1 and PowerShell 7. If it reports `running scripts is disabled`, run this from the repository directory:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+This sets the execution policy for this process only; it does not change user or system policy settings. Installer flags such as `-Target` can be appended to the command.
+
 ```bash
 git clone https://github.com/hongshuxifan321/agenttime
 cd agenttime
@@ -85,11 +93,12 @@ python cli.py doctor                       # what can be read on this machine
 python cli.py scan --out facts.json        # statistics
 # write narrative.json (follow narrative.example.json)
 python cli.py render facts.json narrative.json
+python tests/test_agenttime.py             # regression tests
 ```
 
 Output defaults to `~/Desktop/agenttime_report_YYYYMMDD_HHMMSS.html`. The timestamp is down to the second, so running it several times a day — or once per agent — never overwrites an earlier report. If the desktop is not writable it falls back to the current directory and prints the real path, still without overwriting anything already there.
 
-Passing `--out` does overwrite. That is a name you chose yourself.
+Passing `--out` can replace that report, but never an input facts, narrative or template file. An explicit output failure stops without falling back to another path. Outputs are written to a temporary file before atomic publication; concurrent default outputs cannot overwrite each other.
 
 Keep intermediates in `.agenttime/` under the current directory rather than `$env:TEMP`: inside the DSH sandbox the session TEMP is `Temp\dsh-xxxx` while an elevated process gets `Temp`, so files go missing halfway through.
 
@@ -101,7 +110,7 @@ Keep intermediates in `.agenttime/` under the current directory rather than `$en
 | Narrative | the AI writes it — the only layer that needs judgement | `narrative.json` |
 | Rendering | `render.py` + `template.html` | one HTML file |
 
-`narrative.json` contains no digits, only placeholders like `{volume.msgs|comma}` resolved against `facts.json` at render time. Every number in the prose therefore matches the data; the AI cannot invent one.
+`narrative.json` contains no digits, only placeholders like `{volume.msgs|comma}` resolved against `facts.json` at render time. The renderer rejects handwritten digits and common Chinese quantity expressions; narrative claims still need to be checked against the facts. Missing facts stop rendering instead of being estimated or filled in. The cover, dates, lists and chrome use the same placeholder path.
 
 The report speaks the same language as your conversations. The few fixed strings in the template default to Chinese; for English data, override them through `chrome` in `narrative.json` — see `SKILL.md`.
 
@@ -118,6 +127,7 @@ The report speaks the same language as your conversations. The few fixed strings
 | `template.html` | layout: cover / cards / divider / essay / footer |
 | `narrative.example.json` | example narrative (fictional data, structure only) |
 | `install.ps1` / `install.sh` | installers |
+| `tests/` | regression tests, standard library only |
 
 ## Data sources: DSH first, discovery for the rest
 
@@ -137,19 +147,21 @@ For a single source: `python cli.py scan --source dsh`.
 
 `doctor` looks in two places. First, fixed paths for known agents — Claude Code's `~/.claude/projects`, Codex's `~/.codex/sessions`, ZCode's `~/.zcode/cli/db`. These are nested several levels deep and the files are named by UUID, so a generic directory scan will never find them. Then a generic scan catches anything else whose name looks like a conversation store.
 
+The command line prints in Chinese. Its output looks like this:
+
 ```
-found 1 source:
+找到 1 个数据源：
 
   dsh  ~/.dsh/sessions
-    40 sessions · 612 human messages
-    filtered 481 injected system messages
+    40 个会话 · 612 条真人消息
+    挡掉系统注入 481 条
 
-these places hold conversation data that agenttime cannot read yet:
+还有这些地方有对话数据，但 agenttime 还读不了：
 
   Codex  ~/.codex/sessions
-    98 candidate files, e.g. 2026/11/05/rollout-....jsonl.zst
+    98 个候选文件，例如 2026/11/05/rollout-....jsonl.zst
   ZCode  ~/.zcode/cli/db/db.sqlite
-    1 candidate file, e.g. db.sqlite
+    1 个候选文件，例如 db.sqlite
 ```
 
 **On a machine without DSH this output is the whole point.** `doctor` exits non-zero, but not with a bare "not found" — it tells you what conversation data exists, where, and then admits it cannot read it. It will not assemble a report out of something else.
@@ -172,11 +184,13 @@ def load(root: str) -> tuple[list[Session], LoadReport]:
 
 Then add a line to `REGISTRY` in `adapters/__init__.py`. Statistics and rendering stay untouched.
 
+If you support Python 3.9, put `from __future__ import annotations` at the top of the new file — the `str | None` and `tuple[...]` annotations above are only legal there with it.
+
 The hard part is always the injection filter in `load()`. DSH has a clean field, `source.kind == "user"`; most agents do not, so you have to infer from `isMeta`, `synthetic`, XML tags and similar markers. Get it wrong and the top-words card fills up with system prompt text — this is the easiest thing in the project to get wrong.
 
 ## Measurement notes
 
-- Only human input counts. DSH writes runtime context, `AGENTS.md` and the skill catalog as `user/message` events; these are dropped by requiring `data.source.kind == "user"`. On the machine this was built on, 2,608 such events contained only 1,360 genuine messages — injected text outweighed real input 92×
+- Only human input counts. DSH writes runtime context, `AGENTS.md` and the skill catalog as `user/message` events; these are dropped by requiring `data.source.kind == "user"`. The injected events are few in number but huge in size: on this machine 1,288 of them carried 11.0M characters against 129k characters of real input, about 85×. Skip the filter and the word-frequency card fills up with instruction text
 - Timestamps come from human messages only, never from tool calls or title events
 - "Thinking volume" is the character length of reasoning blocks, not the block count
 - "A sitting" splits messages on gaps longer than 90 minutes, rather than using a session's first and last timestamp — sessions resume days later, and first/last arithmetic produces values like 453 hours

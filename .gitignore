@@ -8,3 +8,7 @@ __pycache__/
 facts.json
 narrative.json
 agenttime_report_*.html
+
+# 测试运行时留下的临时目录
+tests/_tmp/
+_broken_tpl.html

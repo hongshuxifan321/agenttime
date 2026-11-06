@@ -83,11 +83,64 @@ skills_dirs() {
     printf '%s\n' "${found[@]}"
 }
 
+canonical_path() {
+    local path="$1"
+    if [[ -d "$path" ]]; then
+        (cd -P -- "$path" && pwd -P)
+    else
+        local parent
+        parent="$(dirname -- "$path")"
+        local resolved_parent
+        resolved_parent="$(canonical_path "$parent")" || return 1
+        printf '%s/%s\n' "$resolved_parent" "$(basename -- "$path")"
+    fi
+}
+
+move_aside() {
+    # Move an existing install out of the way under a hidden sibling name.
+    # Prints the new path; returns non-zero if the move fails.
+    local path="$1" parent base candidate
+    parent="$(dirname -- "$path")"
+    base="$(basename -- "$path")"
+    candidate="$parent/.old-$base-$$-$RANDOM"
+    mv -- "$path" "$candidate" || return 1
+    printf '%s\n' "$candidate"
+}
+
+# restore_backup 要改调用者的局部变量，bash 没有闭包，只好借这两个中继。
+AT_DEST=""
+AT_BACKUP=""
+restore_backup() {
+    [[ -n "$AT_BACKUP" ]] || return 0
+    if [[ -e "$AT_DEST" || -L "$AT_DEST" ]]; then
+        rm -rf -- "$AT_DEST" 2>/dev/null || true
+    fi
+    if mv -- "$AT_BACKUP" "$AT_DEST" 2>/dev/null; then
+        echo "   old installation restored." >&2
+        AT_BACKUP=""
+        return 0
+    fi
+    echo "   rollback failed; the previous copy is still at: $AT_BACKUP" >&2
+    return 1
+}
+
 install_skill() {
     local skills_dir="$1"
     local dest="$skills_dir/$SKILL_NAME"
 
     echo "-> $dest"
+
+    local source_path dest_path
+    source_path="$(canonical_path "$SOURCE")" || return 1
+    dest_path="$(canonical_path "$dest")" || return 1
+    if [[ "$source_path" == "$dest_path" || "$SOURCE" -ef "$dest" ]]; then
+        echo "   already running from this installation; unchanged."
+        return 0
+    fi
+    if [[ "$source_path/" == "$dest_path/"* || "$dest_path/" == "$source_path/"* ]]; then
+        echo "   source and destination must not contain each other." >&2
+        return 1
+    fi
 
     if [[ -e "$dest" || -L "$dest" ]]; then
         if [[ $FORCE -eq 0 ]]; then
@@ -105,29 +158,74 @@ install_skill() {
                 return 1
             fi
         fi
-        rm -rf -- "$dest"
     fi
 
-    mkdir -p "$skills_dir"
+    mkdir -p "$skills_dir" || return 1
+
+    # 发布顺序：先备好新的，再把旧的挪开，最后一步换名。旧安装在中途任何
+    # 一刻失败都还能拿回来；换名成功之后才算新安装生效，此后绝不再回滚。
+    local backup="" staging="" published=0
 
     if [[ $LINK -eq 1 ]]; then
+        if [[ -e "$dest" || -L "$dest" ]]; then
+            backup="$(move_aside "$dest")" || return 1
+        fi
         if ln -s "$SOURCE" "$dest" 2>/dev/null; then
             echo "   linked."
-            return 0
+            published=1
+        else
+            echo "   link failed, copying instead."
+            rm -f -- "$dest" 2>/dev/null || true
         fi
-        echo "   link failed, copying instead."
     fi
 
-    mkdir -p "$dest"
-    # Copy everything except VCS metadata, caches, and the README screenshots.
-    (cd "$SOURCE" && tar -cf - \
-        --exclude='.git' \
-        --exclude='__pycache__' \
-        --exclude='.agenttime' \
-        --exclude='docs' \
-        .) | (cd "$dest" && tar -xf -)
+    if [[ $published -eq 0 ]]; then
+        staging="$skills_dir/.new-$SKILL_NAME-$$-$RANDOM"
+        if ! mkdir -p "$staging"; then
+            # 链接失败时旧安装已经挪走了，这里退出必须把它换回来
+            echo "   cannot prepare a staging directory; attempting to restore the previous installation." >&2
+            AT_DEST="$dest"; AT_BACKUP="$backup"; restore_backup
+            return 1
+        fi
+        # Copy everything except VCS metadata, caches, and the README screenshots.
+        # 显式判断管道状态：本函数是在 `if install_skill ...` 里调的，那个语境下
+        # errexit 不生效，tar 失败也会一路走到「copied.」并返回成功。
+        if ! (cd "$SOURCE" && tar -cf - \
+                --exclude='.git' \
+                --exclude='__pycache__' \
+                --exclude='.agenttime' \
+                --exclude='docs' \
+                .) | (cd "$staging" && tar -xf -); then
+            rm -rf -- "$staging"
+            if [[ -n "$backup" ]]; then
+                # 链接失败时旧目录已经挪走了，这句话不能再说「没被动过」
+                echo "   copy failed; attempting to restore the previous installation." >&2
+            else
+                echo "   copy failed; the existing installation was not changed." >&2
+            fi
+            AT_DEST="$dest"; AT_BACKUP="$backup"; restore_backup
+            return 1
+        fi
 
-    echo "   copied."
+        if [[ -z "$backup" && ( -e "$dest" || -L "$dest" ) ]]; then
+            backup="$(move_aside "$dest")" || { rm -rf -- "$staging"; return 1; }
+        fi
+
+        if ! mv -- "$staging" "$dest"; then
+            echo "   publish failed; restoring the previous installation." >&2
+            rm -rf -- "$staging"
+            AT_DEST="$dest"; AT_BACKUP="$backup"; restore_backup
+            return 1
+        fi
+        echo "   copied."
+    fi
+
+    # 新安装已就位。清理旧副本失败只警告：不能为了删备份再回滚。
+    if [[ -n "$backup" && ( -e "$backup" || -L "$backup" ) ]]; then
+        if ! rm -rf -- "$backup"; then
+            echo "   warning: the new install is in place, but the old copy could not be removed: $backup" >&2
+        fi
+    fi
     return 0
 }
 

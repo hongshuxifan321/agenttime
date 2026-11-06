@@ -18,25 +18,20 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import engine
+from fileio import atomic_write_text
 from adapters import available, load
 from adapters.base import LoadReport
+from adapters.discover import top_dir
 
 
 def _fmt(n: int) -> str:
     return f"{n:,}"
 
 
-def _top_dir(path: str) -> str:
-    """把数据源路径折算到主目录下的第一层目录，用来排除已适配的源。"""
-    home = os.path.expanduser("~")
-    rel = os.path.relpath(path, home)
-    return os.path.join(home, rel.split(os.sep)[0])
-
-
 def _discover_unknown(adapted=()) -> list:
     """找出没有 adapter 的会话存储：先按已知 agent 路径探，再用通用扫描兜底。"""
     from adapters import discover
-    exclude = [_top_dir(r) for r in adapted]
+    exclude = [top_dir(r) for r in adapted]
     items = []
     try:
         items = discover.known(exclude=exclude)
@@ -47,7 +42,7 @@ def _discover_unknown(adapted=()) -> list:
     try:
         # 已知路径已经点到的目录，通用扫描不再重复报
         generic = discover.scan(
-            exclude=exclude + [_top_dir(i["path"]) for i in items])
+            exclude=exclude + [top_dir(i["path"]) for i in items])
     except Exception as exc:
         print(f"[warn] 扫描主目录失败：{exc}", file=sys.stderr)
         generic = []
@@ -87,6 +82,7 @@ def _merge_reports(reports) -> LoadReport:
         m.skipped_no_user += r.skipped_no_user
         m.read_errors += r.read_errors
         m.filtered_injected += r.filtered_injected
+        m.malformed_events += r.malformed_events
         for e in r.errors:
             if e not in m.errors and len(m.errors) < 3:
                 m.errors.append(e)
@@ -113,6 +109,7 @@ def cmd_doctor(_args) -> int:
 
     print(f"找到 {len(found)} 个数据源：\n")
     usable = 0
+    loaded_sources = human_messages = 0
     for name, root in found:
         try:
             sessions, report = load(name, root)
@@ -120,8 +117,11 @@ def cmd_doctor(_args) -> int:
             print(f"  {name}  {root}")
             print(f"    读取失败：{exc}\n")
             continue
-        usable += 1
+        loaded_sources += 1
+        if any(m.dt for session in sessions for m in session.msgs):
+            usable += 1
         msgs = sum(len(s.msgs) for s in sessions)
+        human_messages += msgs
         print(f"  {name}  {root}")
         print(f"    {report.ok} 个会话 · {_fmt(msgs)} 条真人消息")
         if report.filtered_injected:
@@ -130,12 +130,21 @@ def cmd_doctor(_args) -> int:
             print(f"    跳过没有真人消息的会话 {report.skipped_no_user} 个")
         if report.read_errors:
             print(f"    读不出来 {report.read_errors} 个")
+        if report.malformed_events:
+            print(f"    跳过格式异常的事件 {_fmt(report.malformed_events)} 条")
+        # 提示不再只挂在 read_errors 上：形状异常但没读错时，原因同样要说出来
+        if report.read_errors or report.malformed_events:
             for e in report.errors:
                 print(f"      {e}")
         print()
 
     if usable == 0:
-        print("这些数据源一个都没读成功，先解决上面的问题。\n")
+        if loaded_sources == 0:
+            print("这些数据源都未能读取，先按上面的提示解决读取问题，再重跑 doctor。\n")
+        elif human_messages == 0:
+            print("这些数据源没有读到真人消息，先检查上面的读取结果。\n")
+        else:
+            print("读到了真人消息，但都没有可用时间戳，暂时无法统计。\n")
         return 1
 
     if len(found) == 1:
@@ -169,7 +178,7 @@ def cmd_scan(args) -> int:
         try:
             s, r = load(name, root)
         except Exception as exc:
-            print(f"[warn] {name} 读取失败：{exc}")
+            print(f"[warn] {name} 读取失败：{exc}", file=sys.stderr)
             continue
         sessions.extend(s)
         reports.append(r)
@@ -195,9 +204,13 @@ def cmd_scan(args) -> int:
         return 1
     out = args.out or "facts.json"
     parent = os.path.dirname(os.path.abspath(out))
-    os.makedirs(parent, exist_ok=True)
-    with open(out, "w", encoding="utf-8") as fh:
-        json.dump(facts, fh, ensure_ascii=False, indent=2)
+    try:
+        payload = json.dumps(facts, ensure_ascii=False, indent=2, allow_nan=False)
+        os.makedirs(parent, exist_ok=True)
+        atomic_write_text(out, payload)
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"[error] 无法写入 {out}（{exc.__class__.__name__}），未替换已有 facts。")
+        return 1
 
     q = facts["quality"]
     print(f"数据源 {'、'.join(n for n, _ in targets)} · {q['ok']} 个会话 · "

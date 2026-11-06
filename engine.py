@@ -14,7 +14,13 @@ from adapters.base import LoadReport, Session
 
 # ── 行为关键词：用成词/词边界，不用单字，否则「对」「不是」会系统性误报 ──
 RE_THANK = re.compile(r"谢谢|感谢|thanks|thank\s*you", re.I)
-RE_INTERRUPT = re.compile(r"算了|停下|别跑了|别弄了|等等|先别|不要了|\bstop\b", re.I)
+# 「等等」既可能是打断（「等等，我觉得不对」），也可能是列举收尾
+# （「…统计年鉴等等这些数据」）。两个信号一起看才分得开：作为打断时它在
+# 句首或标点之后，且后面不接列举提示词。
+RE_INTERRUPT = re.compile(
+    r"算了|停下|别跑了|别弄了|先别|不要了"
+    r"|(?:^|[，。！？；\s])等等(?![这那的等些类以及都])"
+    r"|\bstop\b", re.I)
 RE_CONFIRM = re.compile(
     r"^(好的|好|ok|okay|可以|行|嗯|没错|没问题|对的|对|是的|收到)\W*$", re.I)
 
@@ -115,11 +121,16 @@ def build_facts(sessions: list[Session], report: LoadReport | None = None) -> di
 
     tools = Counter()
     reasoning = approvals_asked = approvals_granted = 0
+    denied = cancelled = pending = unknown = 0
     for s in sessions:
         tools.update(s.tools)
         reasoning += s.reasoning_chars
         approvals_asked += s.approvals_asked
         approvals_granted += s.approvals_granted
+        denied += s.approvals_denied
+        cancelled += s.approvals_cancelled
+        pending += s.approvals_pending
+        unknown += s.approvals_unknown
 
     interrupt_n = sum(1 for m in all_msgs if RE_INTERRUPT.search(m.text))
     thank_n = sum(1 for m in all_msgs if RE_THANK.search(m.text))
@@ -140,6 +151,13 @@ def build_facts(sessions: list[Session], report: LoadReport | None = None) -> di
         })
     projects.sort(key=lambda p: -p["n"])
 
+    # 列表只放前 10 条，deepest 却是从全部里挑的——消息少但工具调用多的会话
+    # 会掉出前 10，正文就会出现「工具用得最多的项目」不在列表里。补进去。
+    deepest = max(projects, key=lambda p: p["tools"]) if projects else None
+    shown = projects[:10]
+    if deepest is not None and deepest not in shown:
+        shown = shown[:9] + [deepest]
+
     return {
         "span": {"first": first.dt.strftime("%Y-%m-%d %H:%M"),
                  "first_time": first.dt.strftime("%H:%M"),
@@ -148,20 +166,25 @@ def build_facts(sessions: list[Session], report: LoadReport | None = None) -> di
                  "first_date": first.dt.strftime("%Y年%m月%d日"),
                  "first_text": first.text[:120],
                  "last_text": last.text[:120],
-                 "total_days": total_days},
+                 "total_days": total_days,
+                 "months": max(1, round(total_days / 30)),
+                 "first_day": first.dt.strftime("%Y.%m.%d"),
+                 "last_day": last.dt.strftime("%Y.%m.%d")},
         "volume": {"sessions": len(sessions), "msgs": len(all_msgs),
                    "chars": total_chars,
                    "avg_chars": round(total_chars / len(all_msgs), 1)},
         "rhythm": {"active_days": len(dates), "max_streak": best,
                    "sittings": len(sits),
-                   "avg_per_sitting": round(len(all_msgs) / max(1, len(sits)), 1),
+                   # 分子必须和分母同口径：sittings 是按有时间戳的消息切的，
+                   # 用 len(all_msgs) 会把没时间戳的消息也摊进平均句数。
+                   "avg_per_sitting": round(len(dated) / max(1, len(sits)), 1),
                    "busiest_day": busiest_day, "busiest_n": busiest_n,
                    "busiest_titles": busiest_titles.most_common(4),
                    "hour_dist": {h: hour_dist.get(h, 0) for h in range(24)},
                    "peak_hour": hour_dist.most_common(1)[0][0],
                    "peak_count": hour_dist.most_common(1)[0][1],
                    "late_msgs": len(late), "late_sessions": late_sessions,
-                   "latest": max(late, key=lambda m: m.dt).dt.strftime("%m 月 %d 日 %H:%M")
+                   "latest": max(late, key=lambda m: (m.dt.hour, m.dt.minute, m.dt.second, m.ts)).dt.strftime("%m 月 %d 日 %H:%M")
                    if late else None},
         "words": {"en": en_words, "cn": cn_words,
                   "shortest": {"len": shortest.len, "text": shortest.text[:60]},
@@ -174,11 +197,13 @@ def build_facts(sessions: list[Session], report: LoadReport | None = None) -> di
                   "reasoning_chars": reasoning,
                   "ratio": round(reasoning / max(1, total_chars), 1),
                   "read_days": round(reasoning / 10 / 86400),
+                  "read_chars_per_second": 10,
                   "approvals_asked": approvals_asked,
                   "approvals_granted": approvals_granted,
-                  "denied": approvals_asked - approvals_granted},
-        "projects": projects[:10],
-        "deepest_project": max(projects, key=lambda p: p["tools"]) if projects else None,
+                  "denied": denied, "cancelled": cancelled,
+                  "pending": pending, "unknown": unknown},
+        "projects": shown,
+        "deepest_project": deepest,
         # 数据来自哪几个 agent、各贡献多少会话——合并多源时用来核对口径
         "sources": dict(Counter(s.source for s in sessions)),
         "quality": report.as_dict(),
